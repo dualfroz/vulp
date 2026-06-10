@@ -1,0 +1,26 @@
+[package]
+name = "fxg"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-repo git workflow manager"
+
+[[bin]]
+name = "fxg"
+path = "src/main.rs"
+
+[dependencies]
+anyhow       = "1"
+async-trait  = "0.1"
+chrono       = { version = "0.4", features = ["serde"] }
+clap         = { version = "4", features = ["derive"] }
+crossterm    = "0.28"
+dirs         = "5"
+git2         = "0.19"
+inquire      = "0.7"
+keyring      = "3"
+ratatui      = "0.28"
+reqwest      = { version = "0.12", features = ["json"] }
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+tokio        = { version = "1", features = ["full"] }
+toml         = "0.8"
