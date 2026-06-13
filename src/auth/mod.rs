@@ -54,21 +54,95 @@ pub fn save_accounts(accounts: &[Account], cfg: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-// ── keyring ───────────────────────────────────────────────────────────────────
+// ── token storage (keyring with file fallback) ────────────────────────────────
 
 const SERVICE: &str = "fxg";
 
+fn tokens_file() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("~"))
+        .join(".fxg")
+        .join(".tokens")
+}
+
+fn file_read_token(id: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(tokens_file()).ok()?;
+    for line in raw.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == id {
+                return Some(v.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn file_write_token(id: &str, token: &str) -> Result<()> {
+    let path = tokens_file();
+    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !l.starts_with(&format!("{}=", id)))
+        .map(|l| l.to_string())
+        .collect();
+    lines.push(format!("{}={}", id, token));
+
+    std::fs::write(&path, lines.join("\n") + "\n")?;
+
+    // 600 permissions — owner read/write only
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn file_delete_token(id: &str) -> Result<()> {
+    let path = tokens_file();
+    if !path.exists() { return Ok(()); }
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<&str> = existing
+        .lines()
+        .filter(|l| !l.starts_with(&format!("{}=", id)))
+        .collect();
+    std::fs::write(&path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
 pub fn store_token(id: &str, token: &str) -> Result<()> {
-    keyring::Entry::new(SERVICE, id)?.set_password(token)?;
+    // File is always the source of truth — keyring is best-effort only
+    file_write_token(id, token)?;
+    if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
+        let _ = entry.set_password(token);
+    }
     Ok(())
 }
 
 pub fn get_token(id: &str) -> Result<String> {
-    Ok(keyring::Entry::new(SERVICE, id)?.get_password()?)
+    // Read from file first (reliable); keyring as fallback for tokens stored before this fix
+    if let Some(t) = file_read_token(id) {
+        return Ok(t);
+    }
+    if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
+        if let Ok(t) = entry.get_password() {
+            // Migrate to file so future reads don't need keyring
+            let _ = file_write_token(id, &t);
+            return Ok(t);
+        }
+    }
+    Err(anyhow::anyhow!(
+        "no token for '{}' — run: fxg auth import  (or fxg auth add --token <PAT>)", id
+    ))
 }
 
 pub fn delete_token(id: &str) -> Result<()> {
-    keyring::Entry::new(SERVICE, id)?.delete_credential()?;
+    file_delete_token(id)?;
+    if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
+        let _ = entry.delete_credential();
+    }
     Ok(())
 }
 
@@ -105,6 +179,48 @@ fn switch_default(accounts: &mut Vec<Account>, id: &str, cfg: &AppConfig) -> Res
     Ok(())
 }
 
+// ── gh CLI import ─────────────────────────────────────────────────────────────
+
+fn gh_output(args: &[&str]) -> Option<String> {
+    std::process::Command::new("gh")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "null")
+}
+
+fn import_from_gh(accounts: &mut Vec<Account>, cfg: &AppConfig) -> Result<()> {
+    let token = gh_output(&["auth", "token"])
+        .ok_or_else(|| anyhow::anyhow!(
+            "gh auth token failed — run: gh auth login"
+        ))?;
+
+    let username = gh_output(&["api", "user", "--jq", ".login"])
+        .unwrap_or_else(|| cfg.username.clone());
+
+    let email = gh_output(&["api", "user", "--jq", ".email"])
+        .unwrap_or_else(|| cfg.email.clone());
+
+    let account = Account {
+        provider:   "github".into(),
+        alias:      "personal".into(),
+        username:   username.clone(),
+        email,
+        base_url:   None,
+        is_default: true,
+    };
+
+    // mark all others as non-default
+    for a in accounts.iter_mut() { a.is_default = false; }
+
+    add_account(accounts, account, &token, cfg)?;
+    println!("✓ Imported GitHub account for '{}'", username);
+    Ok(())
+}
+
 // ── entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: AuthArgs, cfg: &AppConfig) -> Result<()> {
@@ -125,6 +241,9 @@ pub async fn run(args: AuthArgs, cfg: &AppConfig) -> Result<()> {
             };
             add_account(&mut accounts, account, &token, cfg)?;
             println!("✓ Account added");
+        }
+        Some(AuthAction::Import) => {
+            import_from_gh(&mut accounts, cfg)?;
         }
         Some(AuthAction::Remove { account }) => {
             remove_account(&mut accounts, &account, cfg)?;

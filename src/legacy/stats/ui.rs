@@ -1,4 +1,4 @@
-use crate::stats::{CodeStats, SecWarning, TodoItem};
+use super::{CodeStats, SecWarning, TodoItem};
 use crate::tui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};

@@ -1,5 +1,5 @@
 use crate::auth::Account;
-use crate::init::InitConfig;
+use super::InitConfig;
 use anyhow::Result;
 use inquire::{Confirm, MultiSelect, Select, Text};
 

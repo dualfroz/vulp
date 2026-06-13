@@ -1,17 +1,19 @@
-mod adopt;
 mod app;
 mod auth;
+mod cache;
 mod cli;
 mod config;
-mod init;
+mod debug;
+mod detail;
+mod hub;
+mod labels;
+mod legacy;
+mod projects;
 mod providers;
-mod refactor;
-mod release;
-mod stats;
-mod summary;
 mod status;
-mod sync;
+mod todos;
 mod tui;
+mod util;
 mod workspace;
 
 use anyhow::Result;

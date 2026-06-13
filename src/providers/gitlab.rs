@@ -190,4 +190,31 @@ impl Provider for GitLabProvider {
         let v = Self::check(resp).await.context("whoami")?;
         Ok(v["username"].as_str().unwrap_or("unknown").to_string())
     }
+
+    async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
+        let visibility = if private { "private" } else { "public" };
+        let body = json!({ "visibility": visibility });
+        let resp = self.client
+            .put(self.url(&format!("projects/{}", self.repo_id(repo))))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("update_visibility")?;
+        Ok(())
+    }
+
+    async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
+        let body = json!({ "name": new_name, "path": new_name });
+        let resp = self.client
+            .put(self.url(&format!("projects/{}", self.repo_id(repo))))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("rename_repo")?;
+        Ok(())
+    }
+
+    async fn archive_repo(&self, repo: &str) -> Result<()> {
+        let resp = self.client
+            .post(self.url(&format!("projects/{}/archive", self.repo_id(repo))))
+            .send().await?;
+        Self::check(resp).await.context("archive_repo")?;
+        Ok(())
+    }
 }

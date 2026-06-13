@@ -97,9 +97,24 @@ fn tag_one_repo(path: &Path, version: &str, token: &str, cfg: &AppConfig) -> Res
     Ok(())
 }
 
+fn find_repo_upward() -> Result<(Repository, std::path::PathBuf)> {
+    let mut current = std::env::current_dir()?;
+    loop {
+        if current.join(".git").exists() {
+            let repo = Repository::open(&current)?;
+            return Ok((repo, current));
+        }
+        match current.parent() {
+            Some(p) => current = p.to_path_buf(),
+            None    => anyhow::bail!(
+                "not inside a git repository — run from within a repo, or cd into one first"
+            ),
+        }
+    }
+}
+
 pub async fn run(args: ReleaseArgs, cfg: &AppConfig) -> Result<()> {
-    let cwd      = std::env::current_dir()?;
-    let repo     = Repository::open(&cwd)?;
+    let (repo, cwd) = find_repo_upward()?;
     let accounts = load_accounts(cfg)?;
     let account  = crate::providers::default_account(&accounts, None)
         .ok_or_else(|| anyhow::anyhow!("no account configured — run: fxg auth add"))?;

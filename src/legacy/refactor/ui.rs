@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::refactor::{CleanResult, FindResult};
+use super::{CleanResult, FindResult};
 use crate::tui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
@@ -121,7 +121,7 @@ fn handle_key(state: &mut State, key: crossterm::event::KeyEvent, cfg: &AppConfi
     if state.input_active {
         match key.code {
             KeyCode::Enter => {
-                let results = crate::refactor::find_in_dir(&state.input_buf, &cfg.workspace_root, "workspace");
+                let results = super::find_in_dir(&state.input_buf, &cfg.workspace_root, "workspace");
                 state.find_results = results;
                 state.cursor = 0;
                 state.scroll = 0;
@@ -147,12 +147,12 @@ fn handle_key(state: &mut State, key: crossterm::event::KeyEvent, cfg: &AppConfi
                 state.status = Some("Type pattern and press Enter".into());
             }
             KeyCode::Char('3') => {
-                state.clean_results = crate::refactor::find_unused("dead-code", &cfg.workspace_root);
+                state.clean_results = super::find_unused("dead-code", &cfg.workspace_root);
                 state.view = View::CleanResults;
                 state.cursor = 0;
             }
             KeyCode::Char('4') => {
-                state.find_results = crate::refactor::generate_todo_list(&cfg.workspace_root);
+                state.find_results = super::generate_todo_list(&cfg.workspace_root);
                 state.view = View::FindResults;
                 state.cursor = 0;
             }

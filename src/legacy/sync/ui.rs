@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::status::RepoSummary;
-use crate::sync::SyncResult;
+use super::SyncResult;
 use crate::tui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
@@ -176,11 +176,11 @@ fn execute_action(state: &mut State, cfg: &AppConfig) {
 
     for repo in &selected {
         let result = match state.action_cursor {
-            0 => crate::sync::pull_repo(&repo.path, &token)
+            0 => super::pull_repo(&repo.path, &token)
                     .unwrap_or_else(|e| SyncResult::err(&repo.name, "pull", e.to_string())),
-            1 => crate::sync::commit_repo(&repo.path, &state.commit_msg, &cfg.username, &cfg.email)
+            1 => super::commit_repo(&repo.path, &state.commit_msg, &cfg.username, &cfg.email)
                     .unwrap_or_else(|e| SyncResult::err(&repo.name, "commit", e.to_string())),
-            2 => crate::sync::push_repo(&repo.path, &token, false)
+            2 => super::push_repo(&repo.path, &token, false)
                     .unwrap_or_else(|e| SyncResult::err(&repo.name, "push", e.to_string())),
             _ => SyncResult::err(&repo.name, ACTIONS[state.action_cursor],
                      "niedostepne w TUI — uzyj: fxg sync branch create <name> / fxg sync pr create"),

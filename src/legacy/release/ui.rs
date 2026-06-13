@@ -1,4 +1,4 @@
-use crate::release::{format_changelog_md, ChangelogEntry};
+use super::{format_changelog_md, ChangelogEntry};
 use crate::tui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};

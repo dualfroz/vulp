@@ -32,6 +32,34 @@ pub struct RepoMeta {
     pub stars:       u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PrDetail {
+    pub repo:        String,
+    pub number:      u64,
+    pub title:       String,
+    pub author:      String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub created_ts:  i64,
+    pub updated_ts:  i64,
+    pub url:         String,
+    pub draft:       bool,
+    pub labels:      Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IssueDetail {
+    pub repo:       String,
+    pub number:     u64,
+    pub title:      String,
+    pub author:     String,
+    pub labels:     Vec<String>,
+    pub created_ts: i64,
+    pub updated_ts: i64,
+    pub url:        String,
+    pub comments:   u32,
+}
+
 #[async_trait]
 #[allow(dead_code)]
 pub trait Provider: Send + Sync {
@@ -79,8 +107,36 @@ pub trait Provider: Send + Sync {
     /// Fetch basic metadata (issues, PRs, stars).
     async fn repo_meta(&self, repo: &str) -> Result<RepoMeta>;
 
+    /// List open pull requests for a repository.
+    async fn list_pull_requests(&self, _repo: &str) -> Result<Vec<PrDetail>> {
+        Ok(vec![])
+    }
+
+    /// List open issues for a repository (excludes PRs).
+    async fn list_issues(&self, _repo: &str) -> Result<Vec<IssueDetail>> {
+        Ok(vec![])
+    }
+
     /// Verify the token works, return the authenticated username.
     async fn whoami(&self) -> Result<String>;
+
+    /// Change a repository's visibility.
+    async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
+        let _ = (repo, private);
+        anyhow::bail!("update_visibility not supported by this provider")
+    }
+
+    /// Rename a repository on the remote.
+    async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
+        let _ = (repo, new_name);
+        anyhow::bail!("rename_repo not supported by this provider")
+    }
+
+    /// Archive a repository (make it read-only).
+    async fn archive_repo(&self, repo: &str) -> Result<()> {
+        let _ = repo;
+        anyhow::bail!("archive_repo not supported by this provider")
+    }
 }
 
 /// Build a boxed `Provider` from an `Account`.

@@ -131,14 +131,14 @@ pub async fn run(args: SyncArgs, cfg: &AppConfig) -> Result<()> {
 
     match args.action {
         None => {
-            let repos = crate::status::scan_workspace(&cfg.workspace_root)?;
+            let repos = crate::status::scan_workspace(&cfg.workspace_root, &cfg.workspace_groups)?;
             ui::run_sync_tui(repos, cfg)
         }
         Some(SyncAction::Pull { all, workspace }) => {
             let repos = if let Some(ws) = workspace {
                 repos_for_workspace(&ws, cfg)?
             } else if all {
-                crate::status::scan_workspace(&cfg.workspace_root)?
+                crate::status::scan_workspace(&cfg.workspace_root, &cfg.workspace_groups)?
             } else {
                 let cwd = std::env::current_dir()?;
                 vec![crate::status::repo_summary(&cwd)?]
@@ -150,7 +150,7 @@ pub async fn run(args: SyncArgs, cfg: &AppConfig) -> Result<()> {
         }
         Some(SyncAction::Commit { message, all }) => {
             let msg = message.unwrap_or_else(|| "chore: sync".into());
-            let repos = if all { crate::status::scan_workspace(&cfg.workspace_root)? }
+            let repos = if all { crate::status::scan_workspace(&cfg.workspace_root, &cfg.workspace_groups)? }
                         else { vec![crate::status::repo_summary(&std::env::current_dir()?)? ] };
             for r in repos.iter().filter(|r| r.is_dirty) {
                 print_result(&commit_repo(&r.path, &msg, &cfg.username, &cfg.email)
@@ -159,7 +159,7 @@ pub async fn run(args: SyncArgs, cfg: &AppConfig) -> Result<()> {
             Ok(())
         }
         Some(SyncAction::Push { all, force_with_lease, message }) => {
-            let repos = if all { crate::status::scan_workspace(&cfg.workspace_root)? }
+            let repos = if all { crate::status::scan_workspace(&cfg.workspace_root, &cfg.workspace_groups)? }
                         else { vec![crate::status::repo_summary(&std::env::current_dir()?)? ] };
             // If -m given, commit dirty repos first
             if let Some(msg) = &message {
@@ -191,7 +191,7 @@ pub async fn run(args: SyncArgs, cfg: &AppConfig) -> Result<()> {
                 }
                 BranchAction::Delete { name } => delete_branch(&std::env::current_dir()?, &name)?,
                 BranchAction::Switch { name, all } => {
-                    let repos = if all { crate::status::scan_workspace(&cfg.workspace_root)? }
+                    let repos = if all { crate::status::scan_workspace(&cfg.workspace_root, &cfg.workspace_groups)? }
                                 else { vec![crate::status::repo_summary(&std::env::current_dir()?)? ] };
                     for r in &repos { let _ = switch_branch(&r.path, &name); }
                 }

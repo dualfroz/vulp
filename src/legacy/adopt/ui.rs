@@ -1,4 +1,4 @@
-use crate::adopt::{adopt_folder, AdoptResult};
+use super::{adopt_folder, AdoptResult};
 use crate::config::AppConfig;
 use crate::tui;
 use anyhow::Result;

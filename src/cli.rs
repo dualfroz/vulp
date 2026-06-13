@@ -4,7 +4,10 @@ use clap::{Args, Parser, Subcommand};
 #[command(name = "fxg", about = "Multi-repo git workflow manager", version)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+    /// Show timing debug panel at bottom of TUI
+    #[arg(long, hide = true)]
+    pub debug: bool,
 }
 
 #[derive(Subcommand)]
@@ -31,6 +34,10 @@ pub enum Commands {
     Summary(SummaryArgs),
     /// Import existing local folders into git + create remote repo
     Adopt(AdoptArgs),
+    /// Manage remote repo properties (visibility, topics, rename, delete, archive)
+    Manage(ManageArgs),
+    /// Utility commands: unified log, secret scanning, doc generation
+    Util(UtilArgs),
 }
 
 
@@ -48,6 +55,8 @@ pub enum AuthAction {
         #[arg(long)] alias:    Option<String>,
         #[arg(long)] url:      Option<String>,
     },
+    /// Auto-import credentials from the gh CLI (no token needed)
+    Import,
     Remove  { account: String },
     Switch  { account: String },
     Test    { account: Option<String> },
@@ -226,4 +235,72 @@ pub struct AdoptArgs {
     #[arg(long, default_value = "private")] pub visibility: String,
     /// Initial commit message
     #[arg(long, short = 'm', default_value = "chore: init")] pub message: String,
+}
+
+
+#[derive(Args)]
+pub struct ManageArgs {
+    #[command(subcommand)]
+    pub action: Option<ManageAction>,
+}
+
+#[derive(Subcommand)]
+pub enum ManageAction {
+    /// Delete remote (and optionally local) repository
+    Delete {
+        pub_repo: String,
+        /// Also delete local directory
+        #[arg(long)] local: bool,
+    },
+    /// Rename repository on remote (and locally if found)
+    Rename {
+        pub_repo: String,
+        new_name: String,
+    },
+    /// Change repository visibility (interactive picker)
+    Visibility {
+        /// Repository name (omit to pick from list)
+        pub_repo: Option<String>,
+    },
+    /// Set repository topics (interactive picker)
+    Topics {
+        /// Repository name (omit to pick from list)
+        pub_repo: Option<String>,
+        /// Topics to set (comma-separated; omit to enter interactively)
+        #[arg(long, value_delimiter = ',')] set: Vec<String>,
+    },
+    /// Archive repository (makes it read-only on remote)
+    Archive {
+        pub_repo: String,
+    },
+    /// Interactive wizard: assign local category folder + GitHub topics to all repos
+    Categorize,
+}
+
+
+#[derive(Args)]
+pub struct UtilArgs {
+    #[command(subcommand)]
+    pub action: Option<UtilAction>,
+}
+
+#[derive(Subcommand)]
+pub enum UtilAction {
+    /// Show unified chronological commit log across all repos
+    Log {
+        /// Max commits to show in total
+        #[arg(long, default_value = "30")] limit: usize,
+    },
+    /// Scan git history for common secret patterns
+    FindSecrets {
+        /// Repo names to scan (comma-separated; omit for all)
+        #[arg(value_delimiter = ',')] repos: Vec<String>,
+    },
+    /// Create a new document (CHANGELOG, README, TODO) in a repo
+    NewDoc {
+        /// Repository name (omit to pick from list)
+        pub_repo: Option<String>,
+        /// Document type (omit to pick interactively)
+        #[arg(long = "type")] doc_type: Option<String>,
+    },
 }

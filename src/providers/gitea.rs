@@ -188,4 +188,31 @@ impl Provider for GiteaProvider {
         let v    = Self::check(resp).await.context("whoami")?;
         Ok(v["login"].as_str().unwrap_or("unknown").to_string())
     }
+
+    async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
+        let body = json!({ "private": private });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("update_visibility")?;
+        Ok(())
+    }
+
+    async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
+        let body = json!({ "name": new_name });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("rename_repo")?;
+        Ok(())
+    }
+
+    async fn archive_repo(&self, repo: &str) -> Result<()> {
+        let body = json!({ "archived": true });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("archive_repo")?;
+        Ok(())
+    }
 }

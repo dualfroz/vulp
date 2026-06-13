@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::cli::SummaryArgs;
-use crate::stats::collect_stats;
+use crate::legacy::stats::collect_stats;
 use anyhow::Result;
 use git2::Repository;
 use std::collections::HashMap;

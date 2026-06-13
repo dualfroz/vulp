@@ -24,6 +24,21 @@ pub struct AppConfig {
     /// Example: ["clients", "internal", "opensource"]
     #[serde(default)]
     pub workspace_groups:    Vec<String>,
+    /// Shell command used to copy text to clipboard (e.g. "wl-copy" or "xclip -selection clipboard").
+    #[serde(default = "default_clipboard_cmd")]
+    pub clipboard_cmd:       String,
+    /// Count lines-of-code during workspace scan (slow for large repos; off by default).
+    #[serde(default)]
+    pub show_locs:           bool,
+}
+
+fn default_clipboard_cmd() -> String {
+    for cmd in &["wl-copy", "xclip", "pbcopy"] {
+        if std::process::Command::new("which").arg(cmd).output().map(|o| o.status.success()).unwrap_or(false) {
+            return if *cmd == "xclip" { "xclip -selection clipboard".into() } else { cmd.to_string() };
+        }
+    }
+    String::new()
 }
 
 impl Default for AppConfig {
@@ -44,6 +59,8 @@ impl Default for AppConfig {
             timezone:           "Europe/Warsaw".into(),
             vsc_data_dir:       home.join(".fxg/vsc-data"),
             workspace_groups:   vec![],
+            clipboard_cmd:      default_clipboard_cmd(),
+            show_locs:          false,
         }
     }
 }

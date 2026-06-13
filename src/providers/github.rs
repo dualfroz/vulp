@@ -1,4 +1,4 @@
-use super::{PrInfo, Provider, RepoInfo, RepoMeta};
+use super::{IssueDetail, PrDetail, PrInfo, Provider, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::{header, Client, Response};
@@ -179,4 +179,96 @@ impl Provider for GitHubProvider {
         let v = Self::check(resp).await.context("whoami")?;
         Ok(v["login"].as_str().unwrap_or("unknown").to_string())
     }
+
+    async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
+        let body = serde_json::json!({ "private": private });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("update_visibility")?;
+        Ok(())
+    }
+
+    async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
+        let body = serde_json::json!({ "name": new_name });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("rename_repo")?;
+        Ok(())
+    }
+
+    async fn archive_repo(&self, repo: &str) -> Result<()> {
+        let body = serde_json::json!({ "archived": true });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("archive_repo")?;
+        Ok(())
+    }
+
+    async fn list_pull_requests(&self, repo: &str) -> Result<Vec<PrDetail>> {
+        let resp = self.client
+            .get(self.url(&format!("repos/{}/{}/pulls?state=open&per_page=100", self.owner, repo)))
+            .send().await?;
+        if !resp.status().is_success() { return Ok(vec![]); }
+        let list: Value = resp.json().await.unwrap_or(Value::Array(vec![]));
+        let prs = list.as_array().map(|arr| arr.iter().map(|pr| {
+            let labels: Vec<String> = pr["labels"].as_array()
+                .map(|l| l.iter().filter_map(|x| x["name"].as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            PrDetail {
+                repo:        repo.to_string(),
+                number:      pr["number"].as_u64().unwrap_or(0),
+                title:       pr["title"].as_str().unwrap_or("").to_string(),
+                author:      pr["user"]["login"].as_str().unwrap_or("").to_string(),
+                head_branch: pr["head"]["ref"].as_str().unwrap_or("").to_string(),
+                base_branch: pr["base"]["ref"].as_str().unwrap_or("").to_string(),
+                created_ts:  parse_gh_ts(pr["created_at"].as_str().unwrap_or("")),
+                updated_ts:  parse_gh_ts(pr["updated_at"].as_str().unwrap_or("")),
+                url:         pr["html_url"].as_str().unwrap_or("").to_string(),
+                draft:       pr["draft"].as_bool().unwrap_or(false),
+                labels,
+            }
+        }).collect()).unwrap_or_default();
+        Ok(prs)
+    }
+
+    async fn list_issues(&self, repo: &str) -> Result<Vec<IssueDetail>> {
+        let resp = self.client
+            .get(self.url(&format!(
+                "repos/{}/{}/issues?state=open&per_page=100&pulls=false",
+                self.owner, repo
+            )))
+            .send().await?;
+        if !resp.status().is_success() { return Ok(vec![]); }
+        let list: Value = resp.json().await.unwrap_or(Value::Array(vec![]));
+        let issues = list.as_array().map(|arr| arr.iter()
+            // GitHub /issues returns PRs too — filter them out
+            .filter(|i| i["pull_request"].is_null())
+            .map(|i| {
+                let labels: Vec<String> = i["labels"].as_array()
+                    .map(|l| l.iter().filter_map(|x| x["name"].as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                IssueDetail {
+                    repo:       repo.to_string(),
+                    number:     i["number"].as_u64().unwrap_or(0),
+                    title:      i["title"].as_str().unwrap_or("").to_string(),
+                    author:     i["user"]["login"].as_str().unwrap_or("").to_string(),
+                    labels,
+                    created_ts: parse_gh_ts(i["created_at"].as_str().unwrap_or("")),
+                    updated_ts: parse_gh_ts(i["updated_at"].as_str().unwrap_or("")),
+                    url:        i["html_url"].as_str().unwrap_or("").to_string(),
+                    comments:   i["comments"].as_u64().unwrap_or(0) as u32,
+                }
+            }).collect()
+        ).unwrap_or_default();
+        Ok(issues)
+    }
+}
+
+fn parse_gh_ts(s: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.timestamp())
+        .unwrap_or(0)
 }
