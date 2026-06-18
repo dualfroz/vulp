@@ -145,10 +145,19 @@ impl Provider for GitHubProvider {
             0
         };
 
+        let description = v["description"].as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let topics = v["topics"].as_array()
+            .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
         Ok(RepoMeta {
-            open_issues: v["open_issues_count"].as_u64().unwrap_or(0) as u32,
+            open_issues:  v["open_issues_count"].as_u64().unwrap_or(0) as u32,
             open_prs,
-            stars:       v["stargazers_count"].as_u64().unwrap_or(0) as u32,
+            stars:        v["stargazers_count"].as_u64().unwrap_or(0) as u32,
+            description,
+            topics,
         })
     }
 
@@ -204,6 +213,15 @@ impl Provider for GitHubProvider {
             .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
             .json(&body).send().await?;
         Self::check(resp).await.context("archive_repo")?;
+        Ok(())
+    }
+
+    async fn update_description(&self, repo: &str, description: &str) -> Result<()> {
+        let body = serde_json::json!({ "description": description });
+        let resp = self.client
+            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .json(&body).send().await?;
+        Self::check(resp).await.context("update_description")?;
         Ok(())
     }
 

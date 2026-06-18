@@ -34,7 +34,11 @@ pub fn accounts_path(cfg: &AppConfig) -> PathBuf {
 }
 
 pub fn load_accounts(cfg: &AppConfig) -> Result<Vec<Account>> {
-    let path = accounts_path(cfg);
+    load_accounts_path(&cfg.data_dir)
+}
+
+pub fn load_accounts_path(data_dir: &std::path::Path) -> Result<Vec<Account>> {
+    let path = data_dir.join("accounts.toml");
     if path.exists() {
         let raw = std::fs::read_to_string(&path)?;
         let file: AccountsFile = toml::from_str(&raw)?;

@@ -8,35 +8,27 @@ use super::state::HubState;
 
 // ── sync flow ─────────────────────────────────────────────────────────────────
 
-pub async fn run_sync_flow(repos: &[RepoSummary], targets: &[usize]) -> Result<()> {
+pub async fn run_sync_flow(repos: &[RepoSummary], targets: &[usize], action: &str, commit_msg: &str) -> Result<()> {
     let sel: Vec<&RepoSummary> = targets.iter().filter_map(|&i| repos.get(i)).collect();
     if sel.is_empty() { return Ok(()); }
-    println!("\n  Syncing {} repo(s):", sel.len());
+
+    println!("\n  Syncing {} repo(s)  [{}]:", sel.len(), action);
     for r in &sel { println!("    · {}", r.name); }
     println!();
 
-    let mode = match inquire::Select::new("Action:", vec!["pull", "commit + push", "push only"])
-        .with_page_size(3).prompt_skippable()? { Some(m) => m, None => return Ok(()) };
-
-    let global_msg: Option<String> = if mode == "commit + push" {
-        let m = inquire::Select::new("Commit message:", vec!["same for all", "per repo"]).with_page_size(2).prompt()?;
-        if m == "same for all" { Some(inquire::Text::new("Message:").with_default("chore: update").prompt()?) } else { None }
-    } else { None };
-
     for r in &sel {
         println!("\n  ── {} ──", r.name);
-        match mode {
-            "pull" => git_run(&r.path, &["pull"]),
-            "commit + push" => {
-                let msg = match &global_msg { Some(m) => m.clone(), None => inquire::Text::new(&format!("Message for '{}':", r.name)).with_default("chore: update").prompt()? };
+        match action {
+            "pull" => { git_run(&r.path, &["pull"]); }
+            "commit_push" => {
                 git_run(&r.path, &["add", "-A"]);
-                git_run(&r.path, &["commit", "-m", &msg]);
+                git_run(&r.path, &["commit", "-m", commit_msg]);
                 git_run(&r.path, &["push"]);
             }
-            _ => git_run(&r.path, &["push"]),
+            _ => { git_run(&r.path, &["push"]); }
         }
     }
-    println!("\n  ✓ Done. Press Enter...");
+    println!("\n  ✓ Done. Press Enter…");
     let _ = std::io::stdin().lines().next();
     Ok(())
 }
@@ -135,7 +127,7 @@ pub fn scan_todos_from_repos(state: &mut HubState) -> usize {
 
     for r in &state.repos {
         for pattern in &["TODO", "FIXME", "HACK"] {
-            let results = crate::legacy::refactor::find_in_dir(pattern, &r.path, &r.name);
+            let results = crate::legacy::refactor::find_in_doc_files(pattern, &r.path, &r.name);
             for fr in results.iter().take(50) {
                 let short_file = std::path::Path::new(&fr.file)
                     .file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| fr.file.clone());
@@ -189,6 +181,109 @@ pub fn save_bookmarks(bk: &HashSet<PathBuf>) {
     if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
     let data = Bk { paths: bk.iter().map(|p| p.to_string_lossy().to_string()).collect() };
     if let Ok(s) = toml::to_string_pretty(&data) { let _ = std::fs::write(p, s); }
+}
+
+// ── templates persistence ─────────────────────────────────────────────────────
+
+fn templates_path() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".fxg").join("templates.toml")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct TemplatesFile {
+    #[serde(default)]
+    templates: Vec<super::state::RepoTemplate>,
+}
+
+pub fn load_templates() -> Vec<super::state::RepoTemplate> {
+    use super::state::RepoTemplate;
+    let p = templates_path();
+    if p.exists() {
+        let loaded = toml::from_str::<TemplatesFile>(&std::fs::read_to_string(&p).unwrap_or_default())
+            .map(|f| f.templates)
+            .unwrap_or_default();
+        if !loaded.is_empty() { return loaded; }
+    }
+    // First run — seed built-in stacks
+    let defaults = default_templates();
+    save_templates(&defaults);
+    defaults
+}
+
+fn default_templates() -> Vec<super::state::RepoTemplate> {
+    use super::state::RepoTemplate;
+    vec![
+        RepoTemplate {
+            name: "Rust".into(),
+            description: "Rust project with Cargo".into(),
+            commands: vec![
+                "cargo init".into(),
+                "echo '.env' >> .gitignore".into(),
+                "printf '# TODO\\n\\n- [ ] Initial setup\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+        RepoTemplate {
+            name: "Node.js".into(),
+            description: "Node.js project with npm".into(),
+            commands: vec![
+                "npm init -y".into(),
+                "printf 'node_modules/\\n.env\\ndist/\\nbuild/\\n' > .gitignore".into(),
+                "printf '# TODO\\n\\n- [ ] Initial setup\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+        RepoTemplate {
+            name: "React".into(),
+            description: "React + Vite app".into(),
+            commands: vec![
+                "npm init -y".into(),
+                "npm install react react-dom".into(),
+                "npm install -D vite @vitejs/plugin-react".into(),
+                "printf 'node_modules/\\n.env\\ndist/\\n' > .gitignore".into(),
+                "mkdir -p src public".into(),
+                "printf '# TODO\\n\\n- [ ] Build React components\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+        RepoTemplate {
+            name: "Python".into(),
+            description: "Python project with venv".into(),
+            commands: vec![
+                "python3 -m venv .venv".into(),
+                "printf '.venv/\\n__pycache__/\\n*.pyc\\n.env\\ndist/\\nbuild/\\n*.egg-info/\\n' > .gitignore".into(),
+                "touch main.py requirements.txt".into(),
+                "printf '# TODO\\n\\n- [ ] Initial setup\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+        RepoTemplate {
+            name: "Go".into(),
+            description: "Go module".into(),
+            commands: vec![
+                "go mod init $(basename $PWD)".into(),
+                "touch main.go".into(),
+                "printf '# TODO\\n\\n- [ ] Initial setup\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+        RepoTemplate {
+            name: "Laravel".into(),
+            description: "Laravel PHP project (requires Composer)".into(),
+            commands: vec![
+                "composer create-project laravel/laravel .".into(),
+                "printf '# TODO\\n\\n- [ ] Configure application\\n' > TODO.md".into(),
+                "printf '# Changelog\\n\\n## [Unreleased]\\n' > CHANGELOG.md".into(),
+            ],
+        },
+    ]
+}
+
+pub fn save_templates(templates: &[super::state::RepoTemplate]) {
+    let p = templates_path();
+    if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+    let file = TemplatesFile { templates: templates.to_vec() };
+    if let Ok(s) = toml::to_string_pretty(&file) { let _ = std::fs::write(p, s); }
 }
 
 // ── pins persistence ──────────────────────────────────────────────────────────

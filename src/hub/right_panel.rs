@@ -64,11 +64,12 @@ pub fn render_right(f: &mut Frame, state: &HubState, area: Rect) {
     f.render_widget(blk, area);
 
     match state.tab {
-        Tab::Repos    => render_right_repo(f, state, inner),
-        Tab::Projects => render_right_project(f, state, inner),
-        Tab::Todos    => render_right_todo(f, state, inner),
-        Tab::PRs      => render_right_pr(f, state, inner),
-        Tab::Issues   => render_right_issue(f, state, inner),
+        Tab::Repos       => render_right_repo(f, state, inner),
+        Tab::Projects    => render_right_project(f, state, inner),
+        Tab::Todos       => render_right_todo(f, state, inner),
+        Tab::PRs         => render_right_pr(f, state, inner),
+        Tab::Issues      => render_right_issue(f, state, inner),
+        Tab::Overview | Tab::Stats | Tab::HubSettings => {}
     }
 }
 
@@ -231,9 +232,7 @@ fn render_right_repo(f: &mut Frame, state: &HubState, area: Rect) {
         r_action_line('p', "Manage projects",    Color::White),
         r_action_line('+', "New todo",           Color::White),
         r_action_line('\n', "─────────────────", Color::DarkGray),
-        r_action_line('C', "Clone repo",         Color::DarkGray),
-        r_action_line('I', "Init new repo",      Color::DarkGray),
-        r_action_line('L', "Link folder",        Color::DarkGray),
+        r_action_line('N', "New repo…",          Color::DarkGray),
     ]), action_inner);
 }
 

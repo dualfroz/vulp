@@ -81,31 +81,143 @@ pub fn detect_license(path: &Path) -> bool {
         .iter().any(|f| path.join(f).exists())
 }
 
+// Categories treated as media/binary assets — only displayed when they dominate (>80% of files).
+const ASSET_CATEGORIES: &[&str] = &[
+    "Images", "Textures", "Audio", "Video", "3D", "Fonts",
+    "PDF", "Docs", "Spreadsheets", "Slides", "eBook",
+];
+
 pub fn detect_language(path: &Path) -> Option<String> {
-    // Fast path: check indicator files instead of scanning the full git index.
-    const INDICATORS: &[(&str, &str)] = &[
-        ("Cargo.toml",       "Rust"),
-        ("go.mod",           "Go"),
-        ("pyproject.toml",   "Python"),
-        ("requirements.txt", "Python"),
-        ("setup.py",         "Python"),
-        ("pom.xml",          "Java"),
-        ("build.gradle",     "Java"),
-        ("build.gradle.kts", "Kotlin"),
-        ("Gemfile",          "Ruby"),
-        ("composer.json",    "PHP"),
-        ("Package.swift",    "Swift"),
-        ("mix.exs",          "Elixir"),
-        ("*.cabal",          "Haskell"),
-    ];
-    for (file, lang) in INDICATORS {
-        if path.join(file).exists() { return Some(lang.to_string()); }
+    let mut counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut total = 0usize;
+    lang_walk(path, &mut counts, &mut total, 6);
+    if total == 0 { return None; }
+
+    let asset_total: usize = counts.iter()
+        .filter(|(k, _)| ASSET_CATEGORIES.contains(k))
+        .map(|(_, v)| *v)
+        .sum();
+    let assets_dominate = asset_total * 100 / total > 80;
+
+    // When assets don't dominate, exclude them from both the display and the percentage base.
+    let base = if assets_dominate { total } else { total - asset_total };
+    if base == 0 { return None; }
+
+    let threshold = ((base as f64 * 0.05) as usize).max(1);
+    let mut langs: Vec<(&str, usize)> = counts.into_iter()
+        .filter(|(k, c)| *c >= threshold && (assets_dominate || !ASSET_CATEGORIES.contains(k)))
+        .collect();
+
+    if langs.is_empty() { return None; }
+    langs.sort_by(|a, b| b.1.cmp(&a.1));
+    Some(langs.iter().take(4)
+        .map(|(lang, c)| format!("{} {}%", lang, c * 100 / base))
+        .collect::<Vec<_>>()
+        .join("  "))
+}
+
+fn ext_to_lang(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        // ── code ──────────────────────────────────────────────────────────────
+        "rs"                                          => "Rust",
+        "go"                                          => "Go",
+        "py" | "pyw"                                  => "Python",
+        "js" | "mjs" | "cjs" | "jsx"                 => "JavaScript",
+        "ts" | "tsx"                                  => "TypeScript",
+        "java"                                        => "Java",
+        "kt" | "kts"                                  => "Kotlin",
+        "rb"                                          => "Ruby",
+        "php"                                         => "PHP",
+        "swift"                                       => "Swift",
+        "ex" | "exs"                                  => "Elixir",
+        "hs"                                          => "Haskell",
+        "c" | "h"                                     => "C",
+        "cpp" | "cc" | "cxx" | "hxx" | "hpp"         => "C++",
+        "cs"                                          => "C#",
+        "sh" | "bash" | "zsh" | "fish"                => "Shell",
+        "html" | "htm"                                => "HTML",
+        "css" | "scss" | "sass" | "less"              => "CSS",
+        "lua"                                         => "Lua",
+        "r"                                           => "R",
+        "dart"                                        => "Dart",
+        "scala"                                       => "Scala",
+        "clj" | "cljs"                                => "Clojure",
+        "ml" | "mli"                                  => "OCaml",
+        "nim"                                         => "Nim",
+        "zig"                                         => "Zig",
+        "vue"                                         => "Vue",
+        "svelte"                                      => "Svelte",
+        "tf" | "tfvars"                               => "Terraform",
+        "sql"                                         => "SQL",
+
+        // ── docs & text ───────────────────────────────────────────────────────
+        "md" | "mdx" | "rst"                          => "Markdown",
+        "txt" | "rtf" | "log"                         => "Text",
+        "pdf"                                         => "PDF",
+        "docx" | "doc" | "odt" | "pages"              => "Docs",
+        "xlsx" | "xls" | "ods" | "numbers" | "csv" | "tsv" => "Spreadsheets",
+        "pptx" | "ppt" | "odp" | "keynote"           => "Slides",
+        "epub"                                        => "eBook",
+
+        // ── images ────────────────────────────────────────────────────────────
+        "png" | "jpg" | "jpeg" | "gif" | "webp"
+        | "svg" | "ico" | "bmp" | "tiff" | "tif"
+        | "tga" | "psd" | "xcf" | "raw" | "dng"
+        | "cr2" | "nef" | "heic" | "heif" | "avif"
+        | "apng" | "jxl"                              => "Images",
+
+        // ── textures (GPU / game engine specific) ─────────────────────────────
+        "dds" | "ktx" | "ktx2" | "exr" | "hdr"
+        | "basis" | "bc7" | "astc"                    => "Textures",
+
+        // ── audio ─────────────────────────────────────────────────────────────
+        "mp3" | "wav" | "ogg" | "flac" | "aac"
+        | "m4a" | "wma" | "opus" | "mid" | "midi"
+        | "aif" | "aiff" | "caf" | "ra" | "amr"      => "Audio",
+
+        // ── video ─────────────────────────────────────────────────────────────
+        "mp4" | "mkv" | "avi" | "mov" | "webm"
+        | "m4v" | "wmv" | "flv" | "ogv" | "mpg"
+        | "mpeg" | "m2ts" | "mts" | "vob" | "rm"     => "Video",
+
+        // ── 3d models ─────────────────────────────────────────────────────────
+        "obj" | "fbx" | "blend" | "gltf" | "glb"
+        | "stl" | "dae" | "3ds" | "ply" | "abc"
+        | "usd" | "usda" | "usdc" | "usdz"
+        | "max" | "ma" | "mb" | "c4d" | "lwo"        => "3D",
+
+        // ── fonts ─────────────────────────────────────────────────────────────
+        "ttf" | "otf" | "woff" | "woff2" | "eot"     => "Fonts",
+
+        // ── data / ml ─────────────────────────────────────────────────────────
+        "parquet" | "arrow" | "hdf5" | "h5"
+        | "npy" | "npz" | "pkl" | "mat" | "nc"       => "Data",
+
+        _ => return None,
+    })
+}
+
+fn lang_walk(
+    dir: &Path,
+    counts: &mut HashMap<&'static str, usize>,
+    total: &mut usize,
+    depth: u8,
+) {
+    if depth == 0 || *total >= 5000 { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if SKIP_DIRS.iter().any(|s| *s == name.as_ref()) { continue; }
+            lang_walk(&path, counts, total, depth - 1);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if let Some(lang) = ext_to_lang(ext) {
+                *counts.entry(lang).or_insert(0) += 1;
+                *total += 1;
+            }
+        }
     }
-    if path.join("package.json").exists() {
-        let lang = if path.join("tsconfig.json").exists() { "TypeScript" } else { "JavaScript" };
-        return Some(lang.to_string());
-    }
-    None
 }
 
 // ── lazy per-repo extras ───────────────────────────────────────────────────────

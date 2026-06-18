@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -7,7 +7,7 @@ use ratatui::{
 };
 use super::modals::render_modal;
 use super::right_panel::render_right;
-use super::state::{HubState, Modal, SortMode, Tab};
+use super::state::{HubState, SortMode, Tab};
 use super::tabs::render_list;
 
 pub static HELP_LINES: &[&str] = &[
@@ -82,20 +82,26 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     };
     let health_col = if behind_c > 0 { Color::Red } else if dirty_c > 0 { Color::Yellow } else { Color::Green };
 
-    let pr_badge    = if !state.prs.is_empty()    { format!("PRs({})",    state.prs.len())    } else { "PRs".into() };
-    let issue_badge = if !state.issues.is_empty() { format!("Issues({})", state.issues.len()) } else { "Issues".into() };
+    let pr_badge    = if !state.prs.is_empty()    { format!("5 PRs({})",    state.prs.len())    } else { "5 PRs".into() };
+    let issue_badge = if !state.issues.is_empty() { format!("6 Issues({})", state.issues.len()) } else { "6 Issues".into() };
 
     let mut top_spans = vec![
         Span::styled(" fxg  ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        tab_span("Repos",      state.tab == Tab::Repos),
+        tab_span("1 Overview",    state.tab == Tab::Overview),
         Span::raw(" "),
-        tab_span("Projects",   state.tab == Tab::Projects),
+        tab_span("2 Repos",       state.tab == Tab::Repos),
         Span::raw(" "),
-        tab_span("Todos",      state.tab == Tab::Todos),
+        tab_span("3 Projects",    state.tab == Tab::Projects),
         Span::raw(" "),
-        tab_span(&pr_badge,    state.tab == Tab::PRs),
+        tab_span("4 Todos",       state.tab == Tab::Todos),
         Span::raw(" "),
-        tab_span(&issue_badge, state.tab == Tab::Issues),
+        tab_span(&pr_badge,       state.tab == Tab::PRs),
+        Span::raw(" "),
+        tab_span(&issue_badge,    state.tab == Tab::Issues),
+        Span::raw(" "),
+        tab_span("7 Stats",       state.tab == Tab::Stats),
+        Span::raw(" "),
+        tab_span("8 Settings",    state.tab == Tab::HubSettings),
         Span::raw("   "),
     ];
 
@@ -130,17 +136,21 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
 
     f.render_widget(Paragraph::new(Line::from(top_spans)), outer[0]);
 
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(73), Constraint::Percentage(27)])
-        .split(outer[1]);
+    if state.tab == Tab::Overview {
+        super::tabs::render_overview_global(f, state, outer[1]);
+    } else {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(73), Constraint::Percentage(27)])
+            .split(outer[1]);
 
-    let left_blk   = Block::default().borders(Borders::ALL);
-    let left_inner  = left_blk.inner(cols[0]);
-    f.render_widget(left_blk, cols[0]);
-    state.visible_rows = left_inner.height.saturating_sub(1) as usize;
-    render_list(f, state, left_inner);
-    render_right(f, state, cols[1]);
+        let left_blk  = Block::default().borders(Borders::ALL);
+        let left_inner = left_blk.inner(cols[0]);
+        f.render_widget(left_blk, cols[0]);
+        state.visible_rows = left_inner.height.saturating_sub(1) as usize;
+        render_list(f, state, left_inner);
+        render_right(f, state, cols[1]);
+    }
 
     if state.debug_mode {
         let blk   = Block::default().borders(Borders::TOP).title(" debug ")
@@ -159,6 +169,20 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         let dim = Style::default().fg(Color::DarkGray);
         let key = |k: &str| Span::styled(format!("[{}] ", k), dim);
         let sep = || Span::styled("  ", dim);
+
+        // Contextual line 3: scan progress or selection hint.
+        let line3 = if state.scan_rx.is_some() {
+            Line::from(Span::styled("  scanning repositories…", dim))
+        } else if !state.selected.is_empty() {
+            Line::from(vec![
+                Span::styled(format!("  {} selected", state.selected.len()), Style::default().fg(Color::Cyan)),
+                Span::styled("  — ", dim),
+                key("s"), Span::styled("sync  ", dim),
+                key("r"), Span::styled("release", dim),
+            ])
+        } else {
+            Line::from("")
+        };
 
         let hint_lines: Vec<Line> = if state.modal.is_some() {
             vec![
@@ -183,12 +207,12 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
                 Tab::PRs | Tab::Issues => vec![
                     Line::from(vec![key("↑↓/jk"), Span::styled("navigate  ", dim), key("Tab/←→"), Span::styled("switch tab  ", dim), key("↵"), Span::styled("open in browser  ", dim), key("R"), Span::styled("refresh API  ", dim), key("?"), Span::styled("help  ", dim), key("q"), Span::styled("quit", dim)]),
                     Line::from(""),
-                    Line::from(""),
+                    line3,
                 ],
                 _ => vec![
-                    Line::from(vec![key("↑↓/jk"), Span::styled("navigate  ", dim), key("Tab/←→"), Span::styled("tabs  ", dim), key("/"), Span::styled("filter  ", dim), key("d/b/f/a"), Span::styled("toggle  ", dim), key("S"), Span::styled("sort  ", dim), key("?"), Span::styled("help  ", dim), key("q"), Span::styled("quit", dim)]),
-                    Line::from(vec![key("Space"), Span::styled("select  ", dim), key("*"), Span::styled("select by  ", dim), key("^A"), Span::styled("all/none  ", dim), key("R"), Span::styled("API refresh  ", dim), key("T"), Span::styled("scan TODOs  ", dim), key("X"), Span::styled("code TODOs", dim)]),
-                    Line::from(vec![key("C"), Span::styled("clone  ", dim), key("I"), Span::styled("init repo  ", dim), key("L"), Span::styled("link folder", dim)]),
+                    Line::from(vec![key("↑↓/jk"), Span::styled("navigate  ", dim), key("Tab/←→"), Span::styled("tabs  ", dim), key("/"), Span::styled("filter  ", dim), key("S"), Span::styled("sort & filter  ", dim), key("?"), Span::styled("help  ", dim), key("q"), Span::styled("quit", dim)]),
+                    Line::from(vec![key("Space"), Span::styled("select  ", dim), key("R"), Span::styled("API refresh  ", dim), key("N"), Span::styled("new repo", dim)]),
+                    line3,
                 ],
             }
         };

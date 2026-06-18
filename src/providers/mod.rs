@@ -27,9 +27,11 @@ pub struct PrInfo {
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct RepoMeta {
-    pub open_issues: u32,
-    pub open_prs:    u32,
-    pub stars:       u32,
+    pub open_issues:  u32,
+    pub open_prs:     u32,
+    pub stars:        u32,
+    pub description:  Option<String>,
+    pub topics:       Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -136,6 +138,12 @@ pub trait Provider: Send + Sync {
     async fn archive_repo(&self, repo: &str) -> Result<()> {
         let _ = repo;
         anyhow::bail!("archive_repo not supported by this provider")
+    }
+
+    /// Update the description of a repository.
+    async fn update_description(&self, repo: &str, description: &str) -> Result<()> {
+        let _ = (repo, description);
+        anyhow::bail!("update_description not supported by this provider")
     }
 }
 

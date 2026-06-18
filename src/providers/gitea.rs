@@ -177,9 +177,11 @@ impl Provider for GiteaProvider {
             .send().await?;
         let v = Self::check(resp).await.context("repo_meta")?;
         Ok(RepoMeta {
-            open_issues: v["open_issues_count"].as_u64().unwrap_or(0) as u32,
-            open_prs:    v["open_pr_counter"].as_u64().unwrap_or(0) as u32,
-            stars:       v["stars_count"].as_u64().unwrap_or(0) as u32,
+            open_issues:  v["open_issues_count"].as_u64().unwrap_or(0) as u32,
+            open_prs:     v["open_pr_counter"].as_u64().unwrap_or(0) as u32,
+            stars:        v["stars_count"].as_u64().unwrap_or(0) as u32,
+            description:  v["description"].as_str().filter(|s| !s.is_empty()).map(String::from),
+            topics:       vec![],
         })
     }
 

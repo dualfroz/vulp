@@ -9,7 +9,19 @@ use std::path::PathBuf;
 // ── tabs ──────────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-pub enum Tab { Repos, Projects, Todos, PRs, Issues }
+pub enum Tab { Overview, Repos, Projects, Todos, PRs, Issues, Stats, HubSettings }
+
+// ── global stats ─────────────────────────────────────────────────────────────
+
+pub struct GlobalStats {
+    pub activity:      Vec<(String, usize)>,  // date → aggregated commits
+    pub lang_dist:     Vec<(String, usize)>,  // lang → repo count
+    pub top_repos:     Vec<(String, usize)>,  // name → commit count
+    pub total_commits: usize,
+    pub dirty_count:   usize,
+    pub behind_count:  usize,
+    pub day_pattern:   [usize; 7],            // Mon–Sun commit totals
+}
 
 // ── sort mode ─────────────────────────────────────────────────────────────────
 
@@ -42,7 +54,7 @@ impl SortMode {
 #[derive(Clone)]
 pub enum Modal {
     None,
-    Text    { title: String, prompt: String, value: String, tag: TextTag },
+    Text    { title: String, prompt: String, value: String, tag: TextTag, max_len: Option<usize> },
     Select  { title: String, options: Vec<String>, cursor: usize, tag: SelectTag },
     Multi   { title: String, options: Vec<String>, checks: Vec<bool>, cursor: usize, tag: MultiTag },
     Confirm { message: String, tag: ConfirmTag },
@@ -67,6 +79,17 @@ pub enum TextTag {
     CloneUrl,
     InitName,
     LinkPath,
+    // hub sync
+    SyncMsg,
+    // hub settings editing
+    SetEditor,
+    SetClipboard,
+    SetWorkspace,
+    // import directory
+    ImportDir,
+    // template creation
+    NewTemplateName,
+    NewTemplateCmds(String), // template name
 }
 
 #[derive(Clone)]
@@ -77,6 +100,21 @@ pub enum SelectTag {
     TodoProject { title: String, desc: String, status_idx: usize },
     TodoChangeStatus(usize),
     SelectByCondition,
+    SortFilter,
+    NewRepo,
+    // color palette for project create / rename
+    ProjColorCreate(String),
+    ProjColorRename(usize, String),
+    // hub sync action picker
+    SyncAction,
+    // pull-all account picker
+    PullAllAccount,
+    // repo creation: pick template
+    InitTemplate(String),
+    // template management
+    TemplateMenu(usize),
+    // copy URL: SSH vs HTTPS
+    CopyUrl(std::path::PathBuf),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -91,6 +129,9 @@ pub enum MultiTag {
 pub enum ConfirmTag {
     DeleteProject(usize),
     DeleteTodo(usize),
+    PullAll(usize),          // index into state.accounts
+    RemoveGitAll,
+    DeleteTemplate(usize),
 }
 
 // ── display rows ──────────────────────────────────────────────────────────────
@@ -122,10 +163,30 @@ pub struct FocusedExtra {
     pub diff_preview: DiffState,
 }
 
+// ── repo template ─────────────────────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepoTemplate {
+    pub name:        String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub commands:    Vec<String>,
+}
+
 // ── phase result ──────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
-pub enum PhaseResult { None, OpenDetail, ExecSync, ExecRelease, ExecClone(String), ExecRefresh }
+pub enum PhaseResult {
+    None,
+    OpenDetail,
+    ExecSync,
+    ExecRelease,
+    ExecClone(String),
+    ExecRefresh,
+    ExecTemplateInit { path: PathBuf, commands: Vec<String> },
+    ExecOpenEditor(PathBuf),
+}
 
 // ── modal action ──────────────────────────────────────────────────────────────
 
@@ -176,6 +237,23 @@ pub struct HubState {
     pub meta_cache:   crate::cache::MetaCache,
     /// Background diff computation in progress: (repo_idx, receiver).
     pub diff_rx:      Option<(usize, std::sync::mpsc::Receiver<Vec<String>>)>,
+    // Global Stats tab
+    pub global_stats:        Option<GlobalStats>,
+    pub global_stats_rx:     Option<std::sync::mpsc::Receiver<GlobalStats>>,
+    pub global_stats_period: crate::detail::StatsPeriod,
+    // Hub Settings tab
+    pub hub_settings_cur:    usize,
+    // Loaded once at startup from auth data dir
+    pub accounts:            Vec<crate::auth::Account>,
+    // User-defined repo templates
+    pub templates:           Vec<RepoTemplate>,
+    // Pending sync input collected from in-TUI modals
+    pub pending_sync_action: Option<String>,  // "pull" | "commit_push" | "push_only"
+    pub pending_sync_msg:    Option<String>,
+    // PhaseResult deferred from modal confirm
+    pub pending_phase:       Option<PhaseResult>,
+    // Pull-all background receiver: sends progress strings
+    pub pull_all_rx:         Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl HubState {
@@ -241,6 +319,9 @@ impl HubState {
                 for i in 0..self.issues.len() {
                     d.push(DisplayRow::Issue { idx: i });
                 }
+            }
+            Tab::Overview | Tab::Stats | Tab::HubSettings => {
+                // These tabs render their own content; display list is empty
             }
         }
         self.repo_pos = (0..d.len()).collect();
@@ -433,6 +514,22 @@ impl HubState {
     }
 
     /// Check if the background diff thread finished; if so, update the cache entry.
+    pub fn poll_global_stats(&mut self) {
+        let done = match &self.global_stats_rx {
+            None     => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(s)                                            => Some(s),
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            },
+        };
+        if let Some(s) = done {
+            self.global_stats    = Some(s);
+            self.global_stats_rx = None;
+            self.status_msg      = None;
+        }
+    }
+
     pub fn poll_diff(&mut self) {
         let rx_ready = if let Some((ri, rx)) = &self.diff_rx {
             match rx.try_recv() {

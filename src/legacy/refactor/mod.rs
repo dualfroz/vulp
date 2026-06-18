@@ -47,6 +47,53 @@ pub fn find_in_dir(pattern: &str, root: &Path, repo_name: &str) -> Vec<FindResul
     results
 }
 
+// ── doc-files-only find (for TODO scanner — avoids self-referential hits in source) ──
+
+pub fn find_in_doc_files(pattern: &str, root: &Path, repo_name: &str) -> Vec<FindResult> {
+    let mut results = Vec::new();
+    let rx = match regex_simple(pattern) {
+        Some(r) => r,
+        None    => return results,
+    };
+    walk_doc_files(root, &mut |file_path, rel| {
+        if let Ok(content) = std::fs::read_to_string(&file_path) {
+            for (i, line) in content.lines().enumerate() {
+                if rx(line) {
+                    results.push(FindResult {
+                        repo: repo_name.to_string(),
+                        file: rel.clone(),
+                        line: i + 1,
+                        text: line.trim().chars().take(120).collect(),
+                    });
+                }
+            }
+        }
+    });
+    results
+}
+
+fn walk_doc_files<F: FnMut(std::path::PathBuf, String)>(root: &Path, cb: &mut F) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if !matches!(name.as_ref(), ".git" | "target" | "node_modules" | ".next" | "dist" | "build" | ".venv" | "vendor") {
+                walk_doc_files(&path, cb);
+            }
+        } else {
+            let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_uppercase();
+            let is_doc = matches!(ext.as_deref(), Some("md") | Some("txt") | Some("todo") | Some("org") | Some("rst") | Some("taskpaper"))
+                || matches!(fname.as_ref(), "TODO" | "TASKS" | "FIXME" | "NOTES" | "BUGS" | "ROADMAP");
+            if is_doc {
+                let rel = path.to_string_lossy().to_string();
+                cb(path, rel);
+            }
+        }
+    }
+}
+
 // ── rename ────────────────────────────────────────────────────────────────────
 
 pub fn rename_in_dir(from: &str, to: &str, root: &Path, dry_run: bool) -> Vec<FindResult> {

@@ -79,6 +79,10 @@ pub struct Todo {
     /// Manual (user-created) or CodeScan (found in source).
     #[serde(default)]
     pub source:      TodoSource,
+    #[serde(default)]
+    pub estimate:    Option<String>,
+    #[serde(default)]
+    pub difficulty:  Option<u8>,
     pub created_at:  i64,
     pub updated_at:  i64,
 }
@@ -91,6 +95,7 @@ impl Todo {
         let now = chrono::Utc::now().timestamp();
         Self { id, title, description, status, project,
                repo: None, source: TodoSource::Manual,
+               estimate: None, difficulty: None,
                created_at: now, updated_at: now }
     }
 
@@ -101,6 +106,7 @@ impl Todo {
         Self { id, title, description: String::new(),
                status: TodoStatus::Open, project: None,
                repo: Some(repo), source: TodoSource::CodeScan,
+               estimate: None, difficulty: None,
                created_at: now, updated_at: now }
     }
 

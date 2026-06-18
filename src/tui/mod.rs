@@ -22,7 +22,7 @@ pub fn setup() -> Result<Tty> {
     Ok(Terminal::new(backend)?)
 }
 
-/// Restore terminal to normal mode.
+/// Restore terminal to normal mode (full teardown, consumes terminal).
 pub fn teardown(mut terminal: Tty) -> Result<()> {
     disable_raw_mode()?;
     execute!(
@@ -31,6 +31,22 @@ pub fn teardown(mut terminal: Tty) -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+    Ok(())
+}
+
+/// Leave TUI mode temporarily (for interactive prompts) without destroying terminal.
+pub fn leave_tui(terminal: &mut Tty) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+/// Re-enter TUI mode after leave_tui.
+pub fn enter_tui(terminal: &mut Tty) -> Result<()> {
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
+    terminal.hide_cursor()?;
     Ok(())
 }
 
