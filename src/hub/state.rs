@@ -312,14 +312,17 @@ impl HubState {
             match result {
                 Ok(mut repo) => {
                     repo.bookmarked = self.bookmarks.contains(&repo.path);
-                    // Apply any cached API metadata (stars, PRs, issues)
+                    // Apply any cached API metadata (stars, PRs, issues, CI, alerts)
                     let cache_vals = self.meta_cache.get(&repo.name).map(|e| {
-                        (e.meta.stars, e.meta.open_issues, e.meta.open_prs, e.meta.visibility.clone())
+                        (e.meta.stars, e.meta.open_issues, e.meta.open_prs,
+                         e.meta.visibility.clone(), e.meta.ci_status.clone(), e.meta.dependabot_open)
                     });
-                    if let Some((stars, issues, prs, vis)) = cache_vals {
-                        repo.stars       = stars;
-                        repo.open_issues = issues;
-                        repo.open_prs    = prs;
+                    if let Some((stars, issues, prs, vis, ci, dep)) = cache_vals {
+                        repo.stars           = stars;
+                        repo.open_issues     = issues;
+                        repo.open_prs        = prs;
+                        repo.ci_status       = ci;
+                        repo.dependabot_open = dep;
                         if repo.visibility.is_none() { repo.visibility = vis; }
                     }
                     self.repos.push(repo);

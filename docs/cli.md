@@ -46,7 +46,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 ```
 vulp scan                                # repo count + dirty/behind/ahead summary
 vulp brief [repo]                        # one-shot picture: state + commits + todos + PR/issues
-vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME]
+vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME] [--alerts]
 vulp status <repo>                       # branch, dirty, ahead/behind, last commit...
 vulp stats [--period 1d|7d|30d|90d|1y|all]   # commits per repo in period
 vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|commit|license]
@@ -58,8 +58,16 @@ vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|com
    "is_dirty": true, "last_commit_msg": "...", "last_commit_age": "2h ago",
    "last_commit_ts": 1780000000, "last_tag": null, "visibility": null,
    "owner": "dualfroz", "has_license": false, "lang": "TypeScript 96%",
-   "bookmarked": false, "stars": null, "open_issues": null, "open_prs": null }]
+   "bookmarked": false, "stars": null, "open_issues": null, "open_prs": null,
+   "stash_count": 0, "ci_status": "success", "dependabot_open": 0 }]
 ```
+
+`stars`/`open_issues`/`open_prs`/`ci_status`/`dependabot_open` come from the
+on-disk cache (run `vulp refresh` first). `ci_status` is
+`"success" | "failure" | "running" | null`; `dependabot_open: null` means the
+alert endpoint isn't available for that repo's owner (personal account,
+missing token scope, or feature disabled) as opposed to `0` = "checked, none
+open". `--alerts` filters to repos with `dependabot_open > 0`.
 
 ## Git operations
 
@@ -103,7 +111,7 @@ vulp pr list [--repo R] [--json]        # cached — run `vulp refresh` for fres
 vulp pr create --repo R --title T --head BRANCH [--base main]
 vulp issue list [--repo R] [--json]
 vulp issue create --repo R --title T [--body "..."]
-vulp refresh                            # re-fetch meta + PRs + issues into cache
+vulp refresh                            # re-fetch meta + PRs/issues + CI status + Dependabot alerts
 vulp init NAME [--private] [--description "..."]   # local init + create remote + push
 vulp accounts [--json]
 ```

@@ -20,7 +20,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
     let cur_di = state.cur_di().unwrap_or(usize::MAX);
 
     let header = Row::new(vec![
-        "    ", "NAME", "BRANCH", "PROJECT", "VISIB", "AGE", "STATUS", "RELEASE", "LICENSE", "STARS",
+        "    ", "NAME", "BRANCH", "PROJECT", "VISIB", "AGE", "STATUS", "RELEASE", "LICENSE", "CI", "ALERT", "STARS",
     ]).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = state.display.iter().enumerate()
@@ -51,6 +51,21 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
                 Color::Yellow
             };
             let lic_str   = if r.has_license { "✓" } else { "—" };
+            let (ci_str, ci_col) = match r.ci_status.as_deref() {
+                Some("success") => ("✓", Color::Green),
+                Some("failure") => ("✗", Color::Red),
+                Some("running") => ("●", Color::Yellow),
+                _               => ("—", Color::DarkGray),
+            };
+            let dep_str = match r.dependabot_open {
+                Some(0) => "0".to_string(),
+                Some(n) => format!("{}", n),
+                None    => "—".into(),
+            };
+            let dep_col = match r.dependabot_open {
+                Some(0) | None => Color::DarkGray,
+                Some(_)        => Color::Red,
+            };
             let stars_str = r.stars.map(|s| format!("{}", s)).unwrap_or_else(|| "—".into());
             let stars_col = if r.stars.is_some() { Color::Yellow } else { Color::DarkGray };
             let is_pinned = state.pins.contains(&r.path);
@@ -71,6 +86,8 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
                 Cell::from(status_str).style(if r.is_dirty || r.behind > 0 { Style::default().fg(Color::Yellow) } else if is_stale { Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM) } else { Style::default().fg(Color::DarkGray) }),
                 Cell::from(rel.chars().take(7).collect::<String>()).style(Style::default().fg(Color::Cyan)),
                 Cell::from(lic_str).style(Style::default().fg(if r.has_license { Color::Green } else { Color::DarkGray })),
+                Cell::from(ci_str).style(Style::default().fg(ci_col)),
+                Cell::from(dep_str).style(Style::default().fg(dep_col)),
                 Cell::from(stars_str).style(Style::default().fg(stars_col)),
             ]).style(row_sty))
         })
@@ -86,6 +103,8 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
         Constraint::Length(9),
         Constraint::Length(10),
         Constraint::Length(9),
+        Constraint::Length(4),
+        Constraint::Length(6),
         Constraint::Length(8),
     ];
     f.render_widget(Table::new(rows, widths).header(header), area);

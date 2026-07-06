@@ -82,9 +82,11 @@ pub async fn run_overview_tui(
     for r in &mut repos {
         if let Some(entry) = meta_cache.get(&r.name) {
             let m = &entry.meta;
-            r.stars       = m.stars;
-            r.open_issues = m.open_issues;
-            r.open_prs    = m.open_prs;
+            r.stars           = m.stars;
+            r.open_issues     = m.open_issues;
+            r.open_prs        = m.open_prs;
+            r.ci_status       = m.ci_status.clone();
+            r.dependabot_open = m.dependabot_open;
             if r.visibility.is_none() { r.visibility = m.visibility.clone(); }
         }
     }

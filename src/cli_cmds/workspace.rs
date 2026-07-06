@@ -9,13 +9,14 @@ use anyhow::Result;
 pub fn list(
     cfg: &AppConfig, json: bool,
     dirty: bool, behind: bool, ahead: bool,
-    lang: Option<String>, project: Option<String>,
+    lang: Option<String>, project: Option<String>, alerts: bool,
 ) -> Result<()> {
     let mut repos = scan_repos(cfg);
 
     if dirty  { repos.retain(|r| r.is_dirty); }
     if behind { repos.retain(|r| r.behind > 0); }
     if ahead  { repos.retain(|r| r.ahead > 0); }
+    if alerts { repos.retain(|r| r.dependabot_open.unwrap_or(0) > 0); }
     if let Some(l) = lang {
         let l = l.to_lowercase();
         repos.retain(|r| r.lang.as_deref().map(|x| x.to_lowercase().contains(&l)).unwrap_or(false));
@@ -44,11 +45,19 @@ pub fn list(
         if r.is_dirty   { flags.push('⚠'); }
         if r.behind > 0 { flags.push('↓'); }
         if r.ahead > 0  { flags.push('↑'); }
-        println!(
-            "{:<name_w$}  {:<12}  {:<3}  {}",
-            r.name, r.branch, flags,
-            r.lang.as_deref().unwrap_or("-"),
-        );
+        if alerts {
+            println!(
+                "{:<name_w$}  {:<12}  {:>3} alerts  {}",
+                r.name, r.branch, r.dependabot_open.unwrap_or(0),
+                r.lang.as_deref().unwrap_or("-"),
+            );
+        } else {
+            println!(
+                "{:<name_w$}  {:<12}  {:<3}  {}",
+                r.name, r.branch, flags,
+                r.lang.as_deref().unwrap_or("-"),
+            );
+        }
     }
     Ok(())
 }

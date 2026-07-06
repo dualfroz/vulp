@@ -47,6 +47,8 @@ pub enum Commands {
         #[arg(long)] lang: Option<String>,
         /// Filter by vulp project name
         #[arg(long)] project: Option<String>,
+        /// Only repos with open Dependabot alerts (cached — run refresh first)
+        #[arg(long)] alerts: bool,
     },
     /// Detailed status of one repo
     Status { repo: String },

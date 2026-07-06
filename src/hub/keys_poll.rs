@@ -141,9 +141,11 @@ pub fn poll_refresh(state: &mut HubState) {
     let mut fetched_meta = 0usize;
     for (name, meta) in metas {
         if let Some(r) = state.repos.iter_mut().find(|r| r.name == name) {
-            r.stars       = meta.stars;
-            r.open_issues = meta.open_issues;
-            r.open_prs    = meta.open_prs;
+            r.stars           = meta.stars;
+            r.open_issues     = meta.open_issues;
+            r.open_prs        = meta.open_prs;
+            r.ci_status       = meta.ci_status.clone();
+            r.dependabot_open = meta.dependabot_open;
         }
         cache.set_meta(&name, meta);
         fetched_meta += 1;

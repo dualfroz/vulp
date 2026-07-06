@@ -86,6 +86,21 @@ pub struct IssueDetail {
     pub comments:   u32,
 }
 
+/// Status of a repo's most recent CI run on its default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiStatus { Success, Failure, Running }
+
+impl CiStatus {
+    /// Stable string form used in the on-disk cache and `--json` output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Running => "running",
+        }
+    }
+}
+
 /// A hosting backend's API surface. Methods that not every provider
 /// implements (`list_orgs`, `list_repos`, optional repo settings) have a
 /// default that either returns an empty result or bails with a clear
@@ -175,6 +190,22 @@ pub trait Provider: Send + Sync {
     /// counters. Providers without a search API report nothing.
     async fn count_search(&self, _query: &str) -> Result<u64> {
         anyhow::bail!("count_search not supported by this provider")
+    }
+
+    /// Open Dependabot-style alert counts for every repo in `org`, keyed by
+    /// lowercase "owner/name" slug — one org-level request instead of one
+    /// per repo. `Ok(None)` = endpoint unavailable (missing scope, feature
+    /// disabled, not an org, or provider has no equivalent).
+    async fn org_dependabot_counts(
+        &self, _org: &str,
+    ) -> Result<Option<std::collections::HashMap<String, u32>>> {
+        Ok(None)
+    }
+
+    /// Status of the most recent CI run on `branch`. `Ok(None)` = no runs /
+    /// CI not available / provider has no equivalent.
+    async fn latest_ci_status(&self, _repo: &str, _branch: &str) -> Result<Option<CiStatus>> {
+        Ok(None)
     }
 
     /// Verify the token works, return the authenticated username.

@@ -680,14 +680,15 @@ pub fn spawn_api_refresh(state: &mut HubState) {
         Ok(a) if !a.is_empty() => a,
         _ => { state.status_msg = Some("No accounts configured — vulp auth add".into()); return; }
     };
-    // (display name = cache key, owner/basename slug for the API). Org-owned
-    // repos are reachable through the personal token, so no owner filtering.
-    let repos: Vec<(String, Option<String>, String)> = state.repos.iter()
+    // (display name = cache key, owner/basename slug for the API, branch for
+    // the CI-run lookup). Org-owned repos are reachable through the personal
+    // token, so no owner filtering.
+    let repos: Vec<(String, Option<String>, String, String)> = state.repos.iter()
         .map(|r| {
             let basename = r.path.file_name()
                 .map(|b| b.to_string_lossy().to_string())
                 .unwrap_or_else(|| r.name.clone());
-            (r.name.clone(), r.owner.clone(), basename)
+            (r.name.clone(), r.owner.clone(), basename, r.branch.clone())
         })
         .collect();
 
@@ -712,18 +713,32 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             };
             let provider: std::sync::Arc<dyn crate::providers::Provider> = std::sync::Arc::from(provider);
 
-            let targets: Vec<(String, String)> = repos.iter()
-                .filter_map(|(name, owner, basename)| {
-                    owner.as_ref().map(|o| (name.clone(), format!("{}/{}", o, basename)))
+            let targets: Vec<(String, String, String)> = repos.iter()
+                .filter_map(|(name, owner, basename, branch)| {
+                    owner.as_ref().map(|o| (name.clone(), format!("{}/{}", o, basename), branch.clone()))
                 })
                 .collect();
             let total = targets.len();
             let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
+            // Dependabot alert counts: one org-level request per distinct
+            // owner (personal owners 404 → None → unknown, shown as "—").
+            let mut dependabot: std::collections::HashMap<String, Option<std::collections::HashMap<String, u32>>> =
+                std::collections::HashMap::new();
+            {
+                let owners: std::collections::HashSet<String> =
+                    repos.iter().filter_map(|(_, o, _, _)| o.clone()).collect();
+                for owner in owners {
+                    let _ = tx.send(RefreshMsg::Progress(format!("Dependabot alerts: {}", owner)));
+                    let counts = provider.org_dependabot_counts(&owner).await.ok().flatten();
+                    dependabot.insert(owner.to_lowercase(), counts);
+                }
+            }
+
             // Up to 6 repos in flight — sequential fetch of ~50 repos × 4
             // requests took 40-80 s; this brings it to ~10 s without tripping
             // GitHub's secondary rate limits.
-            let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug)| {
+            let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug, branch)| {
                 let provider = provider.clone();
                 let tx = tx.clone();
                 let done = done.clone();
@@ -731,24 +746,31 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                     let meta = provider.repo_meta(&slug).await.ok();
                     let p    = provider.list_pull_requests(&slug).await.ok();
                     let i    = provider.list_issues(&slug).await.ok();
+                    let ci   = provider.latest_ci_status(&slug, &branch).await.ok().flatten();
                     let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                     let _ = tx.send(RefreshMsg::Progress(format!("Refreshed {}/{}: {}", n, total, name)));
-                    (name, meta, p, i)
+                    (name, slug, meta, p, i, ci)
                 }
             }))
             .buffer_unordered(6)
             .collect()
             .await;
 
-            for (name, meta, p, i) in results {
+            for (name, slug, meta, p, i, ci) in results {
                 if let Some(meta) = meta {
+                    let slug_lc = slug.to_lowercase();
+                    let dep = dependabot
+                        .get(slug_lc.split('/').next().unwrap_or(""))
+                        .and_then(|per_org| per_org.as_ref()
+                            .map(|m| m.get(&slug_lc).copied().unwrap_or(0)));
                     metas.push((name.clone(), crate::cache::RepoMeta {
-                        stars:       Some(meta.stars),
-                        open_issues: Some(meta.open_issues),
-                        open_prs:    Some(meta.open_prs),
-                        visibility:  None,
-                        ci_ok:       None,
-                        fetched_at:  chrono::Utc::now().timestamp(),
+                        stars:           Some(meta.stars),
+                        open_issues:     Some(meta.open_issues),
+                        open_prs:        Some(meta.open_prs),
+                        visibility:      None,
+                        ci_status:       ci.map(|c| c.as_str().to_string()),
+                        dependabot_open: dep,
+                        fetched_at:      chrono::Utc::now().timestamp(),
                     }));
                 }
                 if let Some(p) = p { prs.push((name.clone(), p)); }
@@ -759,7 +781,7 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             // metric, scoped to every owner we know.
             {
                 let mut owners: std::collections::HashSet<String> =
-                    repos.iter().filter_map(|(_, o, _)| o.clone()).collect();
+                    repos.iter().filter_map(|(_, o, _, _)| o.clone()).collect();
                 owners.insert(account.username.clone());
                 let scope = owners.iter().map(|o| format!("user:{}", o)).collect::<Vec<_>>().join(" ");
                 let _ = tx.send(RefreshMsg::Progress("Counting merged/closed...".into()));

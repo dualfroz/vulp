@@ -26,8 +26,8 @@ pub(crate) struct Guard {
 /// `Config`/`Auth`/the bare TUI (those keep their existing paths in `app.rs`).
 pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Result<()> {
     match cmd {
-        Commands::List { dirty, behind, ahead, lang, project } =>
-            workspace::list(cfg, json, dirty, behind, ahead, lang, project),
+        Commands::List { dirty, behind, ahead, lang, project, alerts } =>
+            workspace::list(cfg, json, dirty, behind, ahead, lang, project, alerts),
         Commands::Status { repo }   => workspace::status(cfg, json, &repo),
         Commands::Scan              => workspace::scan_cmd(cfg, json),
         Commands::Sync { repos, all, project, action, message, allow_secrets } =>
@@ -69,12 +69,27 @@ pub(crate) fn out_json<T: serde::Serialize>(v: &T) {
     }
 }
 
-/// Scans the workspace synchronously (labels already applied by the scan).
+/// Scans the workspace synchronously (labels already applied by the scan)
+/// and enriches each repo with cached API metadata (stars, PR/issue counts,
+/// CI status, Dependabot alerts) — same view the TUI shows on startup.
 pub(crate) fn scan_repos(cfg: &AppConfig) -> Vec<crate::status::RepoSummary> {
-    match crate::status::scan_workspace(&cfg.workspace_root, &[]) {
+    let mut repos = match crate::status::scan_workspace(&cfg.workspace_root, &[]) {
         Ok(r) => r,
         Err(e) => die(1, &format!("workspace scan failed: {e:#}")),
+    };
+    let cache = crate::cache::load();
+    for r in &mut repos {
+        if let Some(entry) = cache.get(&r.name) {
+            let m = &entry.meta;
+            r.stars           = m.stars;
+            r.open_issues     = m.open_issues;
+            r.open_prs        = m.open_prs;
+            r.ci_status       = m.ci_status.clone();
+            r.dependabot_open = m.dependabot_open;
+            if r.visibility.is_none() { r.visibility = m.visibility.clone(); }
+        }
     }
+    repos
 }
 
 /// Finds one repo by (case-insensitive) display name or directory basename;

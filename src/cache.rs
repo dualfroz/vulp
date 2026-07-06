@@ -17,7 +17,10 @@ pub struct RepoMeta {
     pub open_issues: Option<u32>,
     pub open_prs:    Option<u32>,
     pub visibility:  Option<String>,
-    pub ci_ok:       Option<bool>,
+    /// "success" | "failure" | "running" (`CiStatus::as_str`), None = unknown.
+    pub ci_status:   Option<String>,
+    /// Open Dependabot alerts; None = endpoint unavailable for this repo.
+    pub dependabot_open: Option<u32>,
     pub fetched_at:  i64,
 }
 

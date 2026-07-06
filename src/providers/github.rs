@@ -2,7 +2,7 @@
 //! custom `base_url`). Talks to the REST API directly over `reqwest` rather
 //! than the `gh` CLI, so it works the same whether or not `gh` is installed.
 
-use super::{IssueDetail, PrDetail, PrInfo, Provider, RepoAffiliation, RepoInfo, RepoMeta};
+use super::{CiStatus, IssueDetail, PrDetail, PrInfo, Provider, RepoAffiliation, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::{header, Client, Response};
@@ -12,6 +12,17 @@ pub struct GitHubProvider {
     client:   Client,
     owner:    String,
     base_url: String,
+}
+
+/// Extracts the `rel="next"` URL from an RFC-5988 `Link` header, if present.
+fn link_next_url(link: &str) -> Option<String> {
+    link.split(',')
+        .find(|part| part.contains("rel=\"next\""))
+        .and_then(|part| {
+            let start = part.find('<')? + 1;
+            let end = part.find('>')?;
+            Some(part[start..end].to_string())
+        })
 }
 
 impl GitHubProvider {
@@ -261,6 +272,58 @@ impl Provider for GitHubProvider {
             .json(&body).send().await?;
         Self::check(resp).await.context("add_labels")?;
         Ok(())
+    }
+
+    async fn org_dependabot_counts(
+        &self, org: &str,
+    ) -> Result<Option<std::collections::HashMap<String, u32>>> {
+        let mut counts = std::collections::HashMap::new();
+        // One request covers up to 100 open alerts org-wide. The endpoint is
+        // cursor-paginated (`page=` returns 400), so past that we follow the
+        // Link rel="next" header — capped so a pathological org can't stall
+        // the refresh.
+        let mut next = Some(format!(
+            "{}?state=open&per_page=100",
+            self.url(&format!("orgs/{}/dependabot/alerts", org)),
+        ));
+        for _ in 0..10 {
+            let Some(url) = next.take() else { break };
+            let resp = self.client.get(&url).send().await?;
+            if !resp.status().is_success() {
+                // 403 (scope/feature) / 404 (not an org) — unavailable, not an error.
+                return Ok(None);
+            }
+            next = resp.headers().get(header::LINK)
+                .and_then(|l| l.to_str().ok())
+                .and_then(link_next_url);
+            let v: Value = resp.json().await.unwrap_or(Value::Null);
+            let Some(alerts) = v.as_array() else { return Ok(None) };
+            for alert in alerts {
+                if let Some(full) = alert["repository"]["full_name"].as_str() {
+                    *counts.entry(full.to_lowercase()).or_insert(0) += 1;
+                }
+            }
+        }
+        Ok(Some(counts))
+    }
+
+    async fn latest_ci_status(&self, repo: &str, branch: &str) -> Result<Option<CiStatus>> {
+        let resp = self.client
+            .get(self.url(&format!("repos/{}/actions/runs", self.slug(repo))))
+            .query(&[("branch", branch), ("per_page", "1")])
+            .send().await?;
+        if !resp.status().is_success() { return Ok(None); }
+        let v: Value = resp.json().await.unwrap_or(Value::Null);
+        let Some(run) = v["workflow_runs"].as_array().and_then(|a| a.first()) else {
+            return Ok(None);
+        };
+        let status = run["status"].as_str().unwrap_or("");
+        let conclusion = run["conclusion"].as_str();
+        Ok(Some(match (status, conclusion) {
+            ("completed", Some("success")) => CiStatus::Success,
+            ("completed", _)               => CiStatus::Failure,
+            _                              => CiStatus::Running,
+        }))
     }
 
     async fn whoami(&self) -> Result<String> {

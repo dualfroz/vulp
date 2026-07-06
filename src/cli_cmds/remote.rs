@@ -317,22 +317,37 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
 
     // Org-owned repos are reachable through the personal token — refresh
     // everything with an owner, addressed by full "owner/basename" slug.
-    let targets: Vec<(String, String)> = repos.iter()
+    let targets: Vec<(String, String, String)> = repos.iter()
         .filter_map(|r| {
             let basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
                 .unwrap_or_else(|| r.name.clone());
-            r.owner.as_ref().map(|o| (r.name.clone(), format!("{}/{}", o, basename)))
+            r.owner.as_ref().map(|o| (r.name.clone(), format!("{}/{}", o, basename), r.branch.clone()))
         })
         .collect();
 
-    let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug)| {
+    // Dependabot alert counts: one org-level request per distinct owner
+    // (personal owners 404 → None → unknown).
+    let mut dependabot: std::collections::HashMap<String, Option<std::collections::HashMap<String, u32>>> =
+        std::collections::HashMap::new();
+    {
+        let owners: std::collections::HashSet<String> =
+            repos.iter().filter_map(|r| r.owner.clone()).collect();
+        for owner in owners {
+            eprintln!("dependabot alerts: {owner}...");
+            let counts = provider.org_dependabot_counts(&owner).await.ok().flatten();
+            dependabot.insert(owner.to_lowercase(), counts);
+        }
+    }
+
+    let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug, branch)| {
         let provider = provider.clone();
         async move {
             eprintln!("refreshing {slug}...");
             let meta = provider.repo_meta(&slug).await.ok();
             let p    = provider.list_pull_requests(&slug).await.ok();
             let i    = provider.list_issues(&slug).await.ok();
-            (name, meta, p, i)
+            let ci   = provider.latest_ci_status(&slug, &branch).await.ok().flatten();
+            (name, slug, meta, p, i, ci)
         }
     })).buffer_unordered(6).collect().await;
 
@@ -340,15 +355,21 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     let mut fetched_meta = 0usize;
     let mut fetched_prs  = 0usize;
     let mut fetched_iss  = 0usize;
-    for (name, meta, p, i) in results {
+    for (name, slug, meta, p, i, ci) in results {
         if let Some(meta) = meta {
+            let slug_lc = slug.to_lowercase();
+            let dep = dependabot
+                .get(slug_lc.split('/').next().unwrap_or(""))
+                .and_then(|per_org| per_org.as_ref()
+                    .map(|m| m.get(&slug_lc).copied().unwrap_or(0)));
             cache.set_meta(&name, crate::cache::RepoMeta {
-                stars:       Some(meta.stars),
-                open_issues: Some(meta.open_issues),
-                open_prs:    Some(meta.open_prs),
-                visibility:  None,
-                ci_ok:       None,
-                fetched_at:  chrono::Utc::now().timestamp(),
+                stars:           Some(meta.stars),
+                open_issues:     Some(meta.open_issues),
+                open_prs:        Some(meta.open_prs),
+                visibility:      None,
+                ci_status:       ci.map(|c| c.as_str().to_string()),
+                dependabot_open: dep,
+                fetched_at:      chrono::Utc::now().timestamp(),
             });
             fetched_meta += 1;
         }

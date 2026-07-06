@@ -38,6 +38,11 @@ pub struct RepoSummary {
     /// Stash entries, counted from `.git/logs/refs/stash` (cheap file read,
     /// no subprocess — scan-path safe).
     pub stash_count:     usize,
+    /// Latest CI run on the current branch: "success"|"failure"|"running"
+    /// (from the meta cache / API refresh; None = unknown).
+    pub ci_status:       Option<String>,
+    /// Open Dependabot alerts (from the meta cache / API refresh).
+    pub dependabot_open: Option<u32>,
 }
 
 /// One commit's display fields for a recent-commits list.
@@ -393,6 +398,7 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
         last_tag, visibility: None, owner, has_license, lang, bookmarked: false,
         stars: None, open_issues: None, open_prs: None,
         stash_count,
+        ci_status: None, dependabot_open: None,
     })
 }
 
