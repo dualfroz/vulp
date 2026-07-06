@@ -1,3 +1,8 @@
+//! Terminal lifecycle: entering/leaving raw-mode + alternate-screen mode,
+//! polling input events, and a `Ctrl-Z` suspend handler that restores the
+//! terminal before stopping so a suspended `vulp` doesn't leave the shell
+//! reading mouse-escape sequences as commands.
+
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
@@ -50,6 +55,38 @@ pub fn enter_tui(terminal: &mut Tty) -> Result<()> {
     Ok(())
 }
 
+/// Handle Ctrl+Z (SIGTSTP) / `fg` (SIGCONT) so a suspended vulp doesn't leave
+/// the terminal stuck in raw mode + mouse-capture: without this, every mouse
+/// move after suspend gets reported as an escape sequence straight into the
+/// shell, which tries to run it as a command.
+pub fn install_suspend_handler() {
+    use signal_hook::consts::{SIGCONT, SIGTSTP};
+    use signal_hook::iterator::Signals;
+
+    let mut signals = match Signals::new([SIGTSTP, SIGCONT]) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    std::thread::spawn(move || {
+        for sig in signals.forever() {
+            match sig {
+                SIGTSTP => {
+                    let mut stdout = io::stdout();
+                    let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
+                    let _ = disable_raw_mode();
+                    unsafe { libc::raise(libc::SIGSTOP) };
+                }
+                SIGCONT => {
+                    let _ = enable_raw_mode();
+                    let mut stdout = io::stdout();
+                    let _ = execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 /// Poll for the next crossterm event with a timeout.
 pub fn next_event(timeout_ms: u64) -> Result<Option<Event>> {
     if event::poll(Duration::from_millis(timeout_ms))? {
@@ -60,7 +97,6 @@ pub fn next_event(timeout_ms: u64) -> Result<Option<Event>> {
 }
 
 /// Return a centred `Rect` inside `area` using percentage sizes.
-#[allow(dead_code)]
 pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
     let vert = Layout::default()
         .direction(Direction::Vertical)

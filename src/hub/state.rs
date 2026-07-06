@@ -1,3 +1,15 @@
+//! The hub's central state machine: `HubState` (everything the main TUI loop
+//! reads and mutates) plus the `Tab` enum selecting which view is active.
+//! The supporting type definitions this struct is built from — modal types,
+//! display-row addressing, background-thread messages, and a couple of
+//! standalone enums — live in the sibling `state_*` files and are re-exported
+//! below so the rest of `hub/` can keep importing everything from `state::`.
+
+pub use super::state_bg::*;
+pub use super::state_misc::*;
+pub use super::state_modal::*;
+pub use super::state_rows::*;
+
 use crate::projects::{self, Project};
 use crate::providers::{IssueDetail, PrDetail};
 use crate::status::{count_tracked_files, repo_recent_commits, RepoSummary};
@@ -6,194 +18,23 @@ use ratatui::style::Color;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-// ── tabs ──────────────────────────────────────────────────────────────────────
+/// Payload of the startup release-info fetch: latest release, the release
+/// matching the running version, and per-account GitHub creation dates.
+pub type ReleaseFetch = (
+    Result<crate::release_info::ReleaseInfo, String>,
+    Result<crate::release_info::ReleaseInfo, String>,
+    Vec<(String, String)>,
+);
 
+/// Which top-level view of the hub is currently showing. Cycled with Tab/
+/// Shift-Tab or jumped to directly with the number keys shown in the tab bar.
 #[derive(PartialEq, Clone, Copy)]
-pub enum Tab { Overview, Repos, Projects, Todos, PRs, Issues, Stats, HubSettings }
+pub enum Tab { Overview, Repos, Projects, Todos, PRs, Issues, Stats, Activity, HubSettings }
 
-// ── global stats ─────────────────────────────────────────────────────────────
-
-pub struct GlobalStats {
-    pub activity:      Vec<(String, usize)>,  // date → aggregated commits
-    pub lang_dist:     Vec<(String, usize)>,  // lang → repo count
-    pub top_repos:     Vec<(String, usize)>,  // name → commit count
-    pub total_commits: usize,
-    pub dirty_count:   usize,
-    pub behind_count:  usize,
-    pub day_pattern:   [usize; 7],            // Mon–Sun commit totals
-}
-
-// ── sort mode ─────────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum SortMode { Default, Name, Age, DirtyFirst, BehindFirst }
-
-impl SortMode {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Default    => Self::Name,
-            Self::Name       => Self::Age,
-            Self::Age        => Self::DirtyFirst,
-            Self::DirtyFirst => Self::BehindFirst,
-            Self::BehindFirst=> Self::Default,
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Default    => "Default",
-            Self::Name       => "Name",
-            Self::Age        => "Recent",
-            Self::DirtyFirst => "Dirty↑",
-            Self::BehindFirst=> "Behind↑",
-        }
-    }
-}
-
-// ── modal system ──────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub enum Modal {
-    None,
-    Text    { title: String, prompt: String, value: String, tag: TextTag, max_len: Option<usize> },
-    Select  { title: String, options: Vec<String>, cursor: usize, tag: SelectTag },
-    Multi   { title: String, options: Vec<String>, checks: Vec<bool>, cursor: usize, tag: MultiTag },
-    Confirm { message: String, tag: ConfirmTag },
-    Info    { title: String, lines: Vec<String>, scroll: usize },
-}
-
-impl Modal {
-    pub fn is_some(&self) -> bool { !matches!(self, Modal::None) }
-}
-
-#[derive(Clone)]
-pub enum TextTag {
-    Label(usize),
-    ProjName,
-    ProjColor(String),
-    ProjRenameName(usize),
-    ProjRenameColor(usize, String),
-    TodoTitle,
-    TodoDesc(String),
-    TodoEditTitle(usize),
-    TodoEditDesc(usize, String),
-    CloneUrl,
-    InitName,
-    LinkPath,
-    // hub sync
-    SyncMsg,
-    // hub settings editing
-    SetEditor,
-    SetClipboard,
-    SetWorkspace,
-    // import directory
-    ImportDir,
-    // template creation
-    NewTemplateName,
-    NewTemplateCmds(String), // template name
-}
-
-#[derive(Clone)]
-pub enum SelectTag {
-    ProjMenu,
-    ProjForAction(ProjAction),
-    TodoStatus { title: String, desc: String },
-    TodoProject { title: String, desc: String, status_idx: usize },
-    TodoChangeStatus(usize),
-    SelectByCondition,
-    SortFilter,
-    NewRepo,
-    // color palette for project create / rename
-    ProjColorCreate(String),
-    ProjColorRename(usize, String),
-    // hub sync action picker
-    SyncAction,
-    // pull-all account picker
-    PullAllAccount,
-    // repo creation: pick template
-    InitTemplate(String),
-    // template management
-    TemplateMenu(usize),
-    // copy URL: SSH vs HTTPS
-    CopyUrl(std::path::PathBuf),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum ProjAction { Assign, Rename, Delete }
-
-#[derive(Clone)]
-pub enum MultiTag {
-    ProjAssign(usize),
-}
-
-#[derive(Clone)]
-pub enum ConfirmTag {
-    DeleteProject(usize),
-    DeleteTodo(usize),
-    PullAll(usize),          // index into state.accounts
-    RemoveGitAll,
-    DeleteTemplate(usize),
-}
-
-// ── display rows ──────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub enum DisplayRow {
-    Repo    { repo_idx: usize },
-    Project { proj_idx: usize },
-    Todo    { todo_idx: usize },
-    Pr      { idx: usize },
-    Issue   { idx: usize },
-}
-
-// ── pending action ────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub enum PendingAction { Sync, Release }
-
-// ── focused extras (keyed by repo_idx, never cleared on scroll) ───────────────
-
-pub enum DiffState {
-    Loading,
-    Ready(Vec<String>),
-}
-
-pub struct FocusedExtra {
-    pub commits:      Vec<(String, String)>,
-    pub file_count:   usize,
-    pub diff_preview: DiffState,
-}
-
-// ── repo template ─────────────────────────────────────────────────────────────
-
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct RepoTemplate {
-    pub name:        String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub commands:    Vec<String>,
-}
-
-// ── phase result ──────────────────────────────────────────────────────────────
-
-#[derive(PartialEq)]
-pub enum PhaseResult {
-    None,
-    OpenDetail,
-    ExecSync,
-    ExecRelease,
-    ExecClone(String),
-    ExecRefresh,
-    ExecTemplateInit { path: PathBuf, commands: Vec<String> },
-    ExecOpenEditor(PathBuf),
-}
-
-// ── modal action ──────────────────────────────────────────────────────────────
-
-pub enum ModalAction { Pending, Confirm, Cancel }
-
-// ── hub state ─────────────────────────────────────────────────────────────────
-
+/// Everything the hub's main event loop (`tui_phase`) reads and mutates: the
+/// scanned repo/project/todo/PR/issue data, which tab and row are selected,
+/// in-flight background-thread receivers, and user settings. One instance
+/// lives for the lifetime of a single `vulp` TUI session.
 pub struct HubState {
     pub repos:        Vec<RepoSummary>,
     pub projects:     Vec<Project>,
@@ -203,7 +44,6 @@ pub struct HubState {
     pub issues:       Vec<IssueDetail>,
     pub tab:          Tab,
     pub display:      Vec<DisplayRow>,
-    pub repo_pos:     Vec<usize>,
     pub cursor:       usize,
     pub offset:       usize,
     pub visible_rows: usize,
@@ -241,6 +81,24 @@ pub struct HubState {
     pub global_stats:        Option<GlobalStats>,
     pub global_stats_rx:     Option<std::sync::mpsc::Receiver<GlobalStats>>,
     pub global_stats_period: crate::detail::StatsPeriod,
+    // Activity tab
+    pub activity_feed:       Option<Vec<crate::activity::ActivityEntry>>,
+    pub activity_rx:         Option<std::sync::mpsc::Receiver<Vec<crate::activity::ActivityEntry>>>,
+    pub activity_filter:     Option<crate::activity::ActivityKind>,
+    // Overview "vulp log" tile: recent vulp-performed actions, newest first
+    pub vulp_log:            Vec<crate::activity::ActivityEntry>,
+    /// Repo path to re-focus once the startup scan completes (session restore).
+    pub pending_cursor_restore: Option<std::path::PathBuf>,
+    // General Settings tile: release/update info, fetched once at startup
+    pub latest_release:      Option<Result<crate::release_info::ReleaseInfo, String>>,
+    pub current_release:     Option<Result<crate::release_info::ReleaseInfo, String>>,
+    /// GitHub account-creation dates per account username ("since ..."),
+    /// fetched in the same startup thread as the release info.
+    pub account_since:       HashMap<String, String>,
+    /// (merged PRs, closed-unmerged PRs, closed issues) across all owners,
+    /// from the provider search API during [R] refresh. None until fetched.
+    pub closed_counts:       Option<(u64, u64, u64)>,
+    pub release_rx:          Option<std::sync::mpsc::Receiver<ReleaseFetch>>,
     // Hub Settings tab
     pub hub_settings_cur:    usize,
     // Loaded once at startup from auth data dir
@@ -254,6 +112,16 @@ pub struct HubState {
     pub pending_phase:       Option<PhaseResult>,
     // Pull-all background receiver: sends progress strings
     pub pull_all_rx:         Option<std::sync::mpsc::Receiver<String>>,
+    // API refresh ([R]) background receiver
+    pub refresh_rx:          Option<std::sync::mpsc::Receiver<RefreshMsg>>,
+    // Repo creation background receiver: progress + final result, without leaving the TUI
+    pub create_repo_rx:      Option<std::sync::mpsc::Receiver<CreateRepoMsg>>,
+    // Settings-profile pull-from-repo background receiver
+    pub profile_pull_rx:     Option<std::sync::mpsc::Receiver<ProfilePullMsg>>,
+    // Code intelligence background receiver (tree-sitter parsing — CPU-bound, plain thread)
+    pub codeintel_rx:        Option<std::sync::mpsc::Receiver<CodeIntelMsg>>,
+    // Full app config, needed by background threads that create/push repos via providers
+    pub cfg:                 crate::config::AppConfig,
 }
 
 impl HubState {
@@ -277,6 +145,10 @@ impl HubState {
         true
     }
 
+    /// Recomputes `display` for whichever tab is active. Must be
+    /// called after anything that changes what rows should be visible
+    /// (filter/sort changed, data refreshed, tab switched) — `display` is not
+    /// kept in sync automatically.
     pub fn rebuild_display(&mut self) {
         let mut d = Vec::new();
         match self.tab {
@@ -312,23 +184,29 @@ impl HubState {
             }
             Tab::PRs => {
                 for i in 0..self.prs.len() {
-                    d.push(DisplayRow::Pr { idx: i });
+                    d.push(DisplayRow::Pr { pr_idx: i });
                 }
             }
             Tab::Issues => {
                 for i in 0..self.issues.len() {
-                    d.push(DisplayRow::Issue { idx: i });
+                    d.push(DisplayRow::Issue { issue_idx: i });
                 }
             }
-            Tab::Overview | Tab::Stats | Tab::HubSettings => {
+            Tab::Overview | Tab::Stats | Tab::Activity | Tab::HubSettings => {
                 // These tabs render their own content; display list is empty
             }
         }
-        self.repo_pos = (0..d.len()).collect();
-        if self.cursor >= self.repo_pos.len().max(1) {
-            self.cursor = self.repo_pos.len().saturating_sub(1);
+        if self.cursor >= d.len().max(1) {
+            self.cursor = d.len().saturating_sub(1);
         }
-        self.offset = 0;
+        // Keep the (possibly clamped) cursor inside the visible window —
+        // otherwise a filter change can leave it off-screen until the first
+        // arrow key.
+        self.offset = if self.visible_rows > 0 && self.cursor >= self.visible_rows {
+            self.cursor - self.visible_rows + 1
+        } else {
+            0
+        };
         self.display = d;
     }
 
@@ -337,7 +215,7 @@ impl HubState {
     }
 
     pub fn cur_di(&self) -> Option<usize> {
-        self.repo_pos.get(self.cursor).copied()
+        if self.cursor < self.display.len() { Some(self.cursor) } else { None }
     }
     pub fn cur_repo_idx(&self) -> Option<usize> {
         match self.display.get(self.cur_di()?)? {
@@ -381,6 +259,9 @@ impl HubState {
         Color::Rgb(r, g, b)
     }
 
+    /// Repos a bulk action (sync, label, etc.) should apply to: the explicit
+    /// multi-select if there is one, else the single repo under the cursor,
+    /// else every repo in the project under the cursor.
     pub fn action_targets(&self) -> Vec<usize> {
         if self.selected.len() > 1 {
             let mut v: Vec<usize> = self.selected.iter().copied().collect();
@@ -398,19 +279,17 @@ impl HubState {
     }
 
     pub fn scroll_down(&mut self) {
-        let n = self.repo_pos.len();
+        let n = self.display.len();
         if n == 0 || self.cursor + 1 >= n { return; }
         self.cursor += 1;
-        let di = self.repo_pos[self.cursor];
-        if self.visible_rows > 0 && di >= self.offset + self.visible_rows {
-            self.offset = di - self.visible_rows + 1;
+        if self.visible_rows > 0 && self.cursor >= self.offset + self.visible_rows {
+            self.offset = self.cursor - self.visible_rows + 1;
         }
     }
     pub fn scroll_up(&mut self) {
         if self.cursor == 0 { return; }
         self.cursor -= 1;
-        let di = self.repo_pos[self.cursor];
-        if di < self.offset { self.offset = di; }
+        if self.cursor < self.offset { self.offset = self.cursor; }
     }
     pub fn toggle_select(&mut self) {
         if let Some(ri) = self.cur_repo_idx() {
@@ -457,6 +336,16 @@ impl HubState {
                     self.repos.dedup_by(|a, b| a.path == b.path);
                     self.scan_rx = None;
                     scan_done = true;
+                    // Session restore: put the cursor back on the repo it was
+                    // on last time, now that the final sort order is known.
+                    if let Some(want) = self.pending_cursor_restore.take() {
+                        self.rebuild_display();
+                        if let Some(pos) = self.display.iter().position(|row| {
+                            matches!(row, DisplayRow::Repo { repo_idx } if self.repos[*repo_idx].path == want)
+                        }) {
+                            self.cursor = pos;
+                        }
+                    }
                     any_new  = true;
                     break;
                 }
@@ -530,6 +419,66 @@ impl HubState {
         }
     }
 
+    /// Check if the background activity-feed thread finished; if so, store the result.
+    pub fn poll_activity(&mut self) {
+        let done = match &self.activity_rx {
+            None     => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(s)                                            => Some(s),
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            },
+        };
+        if let Some(s) = done {
+            self.activity_feed = Some(s);
+            self.activity_rx   = None;
+            self.status_msg    = None;
+        }
+    }
+
+    /// Check if the background release-info fetch finished; if so, store the result.
+    pub fn poll_release_info(&mut self) {
+        let done = match &self.release_rx {
+            None     => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(pair)                                          => Some(pair),
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            },
+        };
+        if let Some((latest, current, since)) = done {
+            self.latest_release  = Some(latest);
+            self.current_release = Some(current);
+            self.account_since   = since.into_iter().collect();
+            self.release_rx      = None;
+        }
+    }
+
+    /// Check if a background codeintel job (list functions / find usages /
+    /// build rename plan / repo stats) finished, and if so, show its result.
+    pub fn poll_codeintel(&mut self) {
+        let done = match &self.codeintel_rx {
+            None     => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(msg)                                           => Some(msg),
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            },
+        };
+        if let Some(msg) = done {
+            self.codeintel_rx = None;
+            self.status_msg   = None;
+            match msg {
+                CodeIntelMsg::Info { title, lines } => {
+                    self.modal = Modal::Info { title, lines, scroll: 0 };
+                }
+                CodeIntelMsg::Preview { title, lines, plan } => {
+                    self.modal = Modal::RenamePreview { title, lines, scroll: 0, plan };
+                }
+            }
+        }
+    }
+
     pub fn poll_diff(&mut self) {
         let rx_ready = if let Some((ri, rx)) = &self.diff_rx {
             match rx.try_recv() {
@@ -549,6 +498,9 @@ impl HubState {
     }
 }
 
+/// Working-tree diff (vs. HEAD) for `path`, capped at 20 changed-file lines
+/// plus an insertions/deletions summary — enough for the focused-repo
+/// preview panel without rendering a full unbounded diff.
 fn diff_inner(path: &PathBuf) -> Vec<String> {
     let Ok(repo)  = git2::Repository::open(path)                  else { return vec![]; };
     let Ok(head)  = repo.head()                                    else { return vec![]; };

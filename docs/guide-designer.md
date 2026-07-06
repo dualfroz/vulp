@@ -1,4 +1,4 @@
-# Poradnik dla grafika — jak używać fxg
+# Poradnik dla grafika — jak używać vulp
 
 > Ten poradnik zakłada, że nigdy wcześniej nie używałeś terminalu do pracy z kodem. Spokojnie — to jest prostsze niż myślisz.
 
@@ -6,7 +6,7 @@
 
 ## Co to jest i po co to komuś?
 
-Wyobraź sobie, że każdy projekt (strona, aplikacja, assets) mieszka w osobnym folderze na GitHubie. `fxg` to program, który pozwala ci zarządzać tymi wszystkimi folderami jednocześnie — zobaczyć co się zmieniło, wysłać zmiany na serwer, pobrać najnowszą wersję — wszystko bez klikania po interfejsie GitHuba.
+Wyobraź sobie, że każdy projekt (strona, aplikacja, assets) mieszka w osobnym folderze na GitHubie. `vulp` to program, który pozwala ci zarządzać tymi wszystkimi folderami jednocześnie — zobaczyć co się zmieniło, wysłać zmiany na serwer, pobrać najnowszą wersję — wszystko bez klikania po interfejsie GitHuba.
 
 **Dla Ciebie oznacza to:** zamiast wchodzić na stronę GitHuba i klikać w każde repozytorium osobno, wpisujesz jedną komendę i widzisz status wszystkiego.
 
@@ -16,10 +16,10 @@ Wyobraź sobie, że każdy projekt (strona, aplikacja, assets) mieszka w osobnym
 
 ### Windows
 
-1. Pobierz plik `fxg.exe` z sekcji [Releases](https://github.com/twoj-team/fxg/releases) (zakładka "Assets")
+1. Pobierz plik `vulp.exe` z sekcji [Releases](https://github.com/twoj-team/vulp/releases) (zakładka "Assets")
 2. Przenieś plik do folderu `C:\Users\TwojeImie\` (czyli do swojego folderu domowego)
 3. Otwórz **Terminal** (wyszukaj "Terminal" w menu Start, lub `Windows + R` → wpisz `cmd` → Enter)
-4. Wpisz `fxg --version` i naciśnij Enter — jeśli widzisz numer wersji, instalacja się udała
+4. Wpisz `vulp --version` i naciśnij Enter — jeśli widzisz numer wersji, instalacja się udała
 
 > Jeśli system pyta "Czy chcesz uruchomić ten plik?" — kliknij "Tak" / "Uruchom mimo to".
 
@@ -27,14 +27,14 @@ Wyobraź sobie, że każdy projekt (strona, aplikacja, assets) mieszka w osobnym
 
 Otwórz terminal i wklej:
 ```
-curl -fsSL https://github.com/twoj-team/fxg/install.sh | bash
+curl -fsSL https://github.com/twoj-team/vulp/install.sh | bash
 ```
 Gotowe.
 
 ### macOS
 
 ```
-brew install twoj-team/tap/fxg
+brew install twoj-team/tap/vulp
 ```
 (wymaga Homebrew — jeśli nie masz, zapytaj kolegę programistę)
 
@@ -45,7 +45,7 @@ brew install twoj-team/tap/fxg
 Otwórz terminal i wpisz:
 
 ```
-fxg config
+vulp config
 ```
 
 Pojawi się ekran konfiguracji. Ustaw:
@@ -66,7 +66,7 @@ Potrzebujesz **tokenu dostępu** z GitHuba. Oto jak go zdobyć:
 
 1. Wejdź na [github.com/settings/tokens](https://github.com/settings/tokens)
 2. Kliknij **"Generate new token (classic)"**
-3. Wpisz nazwę (np. "fxg na moim laptopie")
+3. Wpisz nazwę (np. "vulp na moim laptopie")
 4. Zaznacz: `repo` (cały zakres)
 5. Kliknij **"Generate token"** na dole
 6. **Skopiuj token** — zobaczysz go tylko raz!
@@ -74,7 +74,7 @@ Potrzebujesz **tokenu dostępu** z GitHuba. Oto jak go zdobyć:
 Teraz wróć do terminalu i wpisz (zamień `TWOJ_TOKEN` na skopiowany token):
 
 ```
-fxg auth add --provider github --token TWOJ_TOKEN
+vulp auth add --provider github --token TWOJ_TOKEN
 ```
 
 Gotowe. Token jest bezpiecznie zapisany na Twoim komputerze.
@@ -86,7 +86,7 @@ Gotowe. Token jest bezpiecznie zapisany na Twoim komputerze.
 ### Sprawdź co się dzieje we wszystkich projektach
 
 ```
-fxg status
+vulp status
 ```
 
 Zobaczysz tabelę z projektami. Co oznaczają kolumny:
@@ -112,7 +112,7 @@ Zobaczysz tabelę z projektami. Co oznaczają kolumny:
 Jeśli `BEHIND` pokazuje liczbę większą od 0, ktoś dodał zmiany na serwerze. Pobierz je:
 
 ```
-fxg sync pull --all
+vulp sync pull --all
 ```
 
 To pobierze najnowszą wersję **wszystkich** projektów naraz.
@@ -124,7 +124,7 @@ To pobierze najnowszą wersję **wszystkich** projektów naraz.
 Masz nowe pliki (np. nowe grafiki, zaktualizowane assets)? Użyj interaktywnego trybu:
 
 ```
-fxg sync
+vulp sync
 ```
 
 Pojawi się ekran z listą projektów. Obsługa:
@@ -142,7 +142,7 @@ Pojawi się ekran z listą projektów. Obsługa:
 ### Szybki push z linii komend (jeśli wiesz co robisz)
 
 ```
-fxg sync push --all -m "aktualizacja grafik landing page"
+vulp sync push --all -m "aktualizacja grafik landing page"
 ```
 
 To jednocześnie commita (z wiadomością po `-m`) i pushuje wszystkie zmienione projekty.
@@ -165,23 +165,23 @@ To jednocześnie commita (z wiadomością po `-m`) i pushuje wszystkie zmienione
 
 ## Coś nie działa?
 
-**Terminal nie zna komendy `fxg`**
-- Windows: sprawdź czy plik `fxg.exe` jest w folderze który jest w PATH. Najprostsze rozwiązanie: przenieś plik do `C:\Windows\System32\`
-- Linux/Mac: sprawdź czy `~/.cargo/bin` jest w PATH, lub uruchom ręcznie: `./fxg`
+**Terminal nie zna komendy `vulp`**
+- Windows: sprawdź czy plik `vulp.exe` jest w folderze który jest w PATH. Najprostsze rozwiązanie: przenieś plik do `C:\Windows\System32\`
+- Linux/Mac: sprawdź czy `~/.cargo/bin` jest w PATH, lub uruchom ręcznie: `./vulp`
 
 **"Permission denied" lub "access denied"**
-- Linux/Mac: wpisz `chmod +x fxg` przed pierwszym uruchomieniem
+- Linux/Mac: wpisz `chmod +x vulp` przed pierwszym uruchomieniem
 
 **"Authentication failed" przy push/pull**
 - Token prawdopodobnie wygasł lub nie ma uprawnień do `repo`
-- Wygeneruj nowy token i dodaj: `fxg auth add --provider github --token NOWY_TOKEN`
+- Wygeneruj nowy token i dodaj: `vulp auth add --provider github --token NOWY_TOKEN`
 
-**Nie widzę swoich projektów w `fxg status`**
-- Sprawdź czy `workspace_root` w `fxg config` wskazuje na właściwy folder
+**Nie widzę swoich projektów w `vulp status`**
+- Sprawdź czy `workspace_root` w `vulp config` wskazuje na właściwy folder
 - Folder musi zawierać podfoldery z projektami (każdy projekt to osobny podfolder z `.git` w środku)
 
-**Zmiany się nie wysyłają, `fxg sync push` nic nie robi**
-- Najpierw sprawdź `fxg status` — kolumna `DIRTY` musi być `✓` żeby był co wysyłać
+**Zmiany się nie wysyłają, `vulp sync push` nic nie robi**
+- Najpierw sprawdź `vulp status` — kolumna `DIRTY` musi być `✓` żeby był co wysyłać
 - Jeśli `DIRTY` jest `✗`, ale `AHEAD` > 0 — wystarczy sam push bez commita
 
 ---
@@ -189,10 +189,10 @@ To jednocześnie commita (z wiadomością po `-m`) i pushuje wszystkie zmienione
 ## Szybka ściąga
 
 ```
-fxg status              # sprawdź co się dzieje
-fxg sync pull --all     # pobierz najnowsze wersje
-fxg sync                # interaktywny ekran: commit + push
-fxg sync push --all -m "opis zmian"   # szybki commit + push
-fxg auth add --provider github --token TOKEN   # dodaj konto
-fxg config              # zmień ustawienia
+vulp status              # sprawdź co się dzieje
+vulp sync pull --all     # pobierz najnowsze wersje
+vulp sync                # interaktywny ekran: commit + push
+vulp sync push --all -m "opis zmian"   # szybki commit + push
+vulp auth add --provider github --token TOKEN   # dodaj konto
+vulp config              # zmień ustawienia
 ```

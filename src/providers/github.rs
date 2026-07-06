@@ -1,4 +1,8 @@
-use super::{IssueDetail, PrDetail, PrInfo, Provider, RepoInfo, RepoMeta};
+//! `Provider` implementation for GitHub (and GitHub Enterprise, via a
+//! custom `base_url`). Talks to the REST API directly over `reqwest` rather
+//! than the `gh` CLI, so it works the same whether or not `gh` is installed.
+
+use super::{IssueDetail, PrDetail, PrInfo, Provider, RepoAffiliation, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::{header, Client, Response};
@@ -11,6 +15,9 @@ pub struct GitHubProvider {
 }
 
 impl GitHubProvider {
+    /// Builds a client authenticated with `token`, scoped to `owner`'s repos
+    /// by default. `base_url` lets this point at a GitHub Enterprise
+    /// instance instead of `api.github.com`.
     pub fn new(base_url: &str, owner: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -23,20 +30,37 @@ impl GitHubProvider {
         );
         headers.insert(
             header::USER_AGENT,
-            header::HeaderValue::from_static("fxg/0.1"),
+            header::HeaderValue::from_static("vulp/0.1"),
         );
         headers.insert(
             "X-GitHub-Api-Version",
             header::HeaderValue::from_static("2022-11-28"),
         );
-        let client = Client::builder().default_headers(headers).build()?;
+        // Without a timeout, a stalled connection (flaky network, secondary
+        // rate-limiting) hangs the background worker forever with no way for
+        // the UI to surface an error — better to fail loud than hang silent.
+        let client = Client::builder()
+            .default_headers(headers)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
         Ok(Self { client, owner: owner.to_string(), base_url: base_url.trim_end_matches('/').to_string() })
     }
 
+    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
+    /// Repo path segment: names may arrive as bare ("vulp" → account owner)
+    /// or fully qualified ("VulCodeCom/vulp" → used verbatim), so org-owned
+    /// repos work with a personal account's token.
+    fn slug(&self, repo: &str) -> String {
+        if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.owner, repo) }
+    }
+
+    /// Parses a response as JSON if the status was successful, otherwise
+    /// turns the non-2xx status and body into an error — the single choke
+    /// point every API call routes through so error messages stay consistent.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text = resp.text().await?;
@@ -50,9 +74,13 @@ impl GitHubProvider {
 
 #[async_trait]
 impl Provider for GitHubProvider {
-    async fn create_repo(&self, name: &str, private: bool, description: &str) -> Result<RepoInfo> {
+    async fn create_repo(&self, name: &str, private: bool, description: &str, owner: Option<&str>) -> Result<RepoInfo> {
         let body = json!({ "name": name, "private": private, "description": description });
-        let resp = self.client.post(self.url("user/repos")).json(&body).send().await?;
+        let path = match owner {
+            Some(org) => format!("orgs/{}/repos", org),
+            None       => "user/repos".to_string(),
+        };
+        let resp = self.client.post(self.url(&path)).json(&body).send().await?;
         let v = Self::check(resp).await.context("create_repo")?;
         Ok(RepoInfo {
             name:    v["name"].as_str().unwrap_or(name).to_string(),
@@ -61,9 +89,49 @@ impl Provider for GitHubProvider {
         })
     }
 
+    async fn list_orgs(&self) -> Result<Vec<String>> {
+        let resp = self.client.get(self.url("user/orgs")).send().await?;
+        let v = Self::check(resp).await.context("list_orgs")?;
+        Ok(v.as_array().map(|arr| {
+            arr.iter().filter_map(|o| o["login"].as_str().map(str::to_string)).collect()
+        }).unwrap_or_default())
+    }
+
+    async fn list_repos(&self, affiliation: &RepoAffiliation) -> Result<Vec<RepoInfo>> {
+        let mut affs = Vec::new();
+        if affiliation.owner        { affs.push("owner"); }
+        if affiliation.collaborator { affs.push("collaborator"); }
+        if affiliation.org_member   { affs.push("organization_member"); }
+        if affs.is_empty() { return Ok(vec![]); }
+
+        let mut repos = Vec::new();
+        let mut url = self.url(&format!("user/repos?affiliation={}&per_page=100", affs.join(",")));
+        loop {
+            let resp = self.client.get(&url).send().await?;
+            let next = resp.headers().get(header::LINK)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_next_link);
+            let v = Self::check(resp).await.context("list_repos")?;
+            if let Some(arr) = v.as_array() {
+                for o in arr {
+                    repos.push(RepoInfo {
+                        name:    o["name"].as_str().unwrap_or_default().to_string(),
+                        url:     o["html_url"].as_str().unwrap_or_default().to_string(),
+                        ssh_url: o["ssh_url"].as_str().unwrap_or_default().to_string(),
+                    });
+                }
+            }
+            match next {
+                Some(next_url) => url = next_url,
+                None => break,
+            }
+        }
+        Ok(repos)
+    }
+
     async fn delete_repo(&self, name: &str) -> Result<()> {
         let resp = self.client
-            .delete(self.url(&format!("repos/{}/{}", self.owner, name)))
+            .delete(self.url(&format!("repos/{}", self.slug(name))))
             .send().await?;
         Self::check(resp).await.context("delete_repo")?;
         Ok(())
@@ -72,7 +140,7 @@ impl Provider for GitHubProvider {
     async fn set_topics(&self, repo: &str, topics: &[String]) -> Result<()> {
         let body = json!({ "names": topics });
         let resp = self.client
-            .put(self.url(&format!("repos/{}/{}/topics", self.owner, repo)))
+            .put(self.url(&format!("repos/{}/topics", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("set_topics")?;
         Ok(())
@@ -80,7 +148,7 @@ impl Provider for GitHubProvider {
 
     async fn create_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()> {
         // Resolve 'from' to a SHA first
-        let ref_url = self.url(&format!("repos/{}/{}/git/ref/heads/{}", self.owner, repo, from));
+        let ref_url = self.url(&format!("repos/{}/git/ref/heads/{}", self.slug(repo), from));
         let resp = self.client.get(&ref_url).send().await?;
         let v = Self::check(resp).await.context("resolve ref")?;
         let sha = v["object"]["sha"].as_str()
@@ -89,7 +157,7 @@ impl Provider for GitHubProvider {
 
         let body = json!({ "ref": format!("refs/heads/{}", branch), "sha": sha });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/git/refs", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/git/refs", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("create_branch")?;
         Ok(())
@@ -100,9 +168,21 @@ impl Provider for GitHubProvider {
     ) -> Result<PrInfo> {
         let payload = json!({ "title": title, "body": body, "head": head, "base": base });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/pulls", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/pulls", self.slug(repo))))
             .json(&payload).send().await?;
         let v = Self::check(resp).await.context("create_pull_request")?;
+        Ok(PrInfo {
+            number: v["number"].as_u64().unwrap_or(0),
+            url:    v["html_url"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
+    async fn create_issue(&self, repo: &str, title: &str, body: &str) -> Result<PrInfo> {
+        let payload = json!({ "title": title, "body": body });
+        let resp = self.client
+            .post(self.url(&format!("repos/{}/issues", self.slug(repo))))
+            .json(&payload).send().await?;
+        let v = Self::check(resp).await.context("create_issue")?;
         Ok(PrInfo {
             number: v["number"].as_u64().unwrap_or(0),
             url:    v["html_url"].as_str().unwrap_or("").to_string(),
@@ -112,7 +192,7 @@ impl Provider for GitHubProvider {
     async fn add_collaborator(&self, repo: &str, user: &str, role: &str) -> Result<()> {
         let body = json!({ "permission": role });
         let resp = self.client
-            .put(self.url(&format!("repos/{}/{}/collaborators/{}", self.owner, repo, user)))
+            .put(self.url(&format!("repos/{}/collaborators/{}", self.slug(repo), user)))
             .json(&body).send().await?;
         Self::check(resp).await.context("add_collaborator")?;
         Ok(())
@@ -123,7 +203,7 @@ impl Provider for GitHubProvider {
     ) -> Result<String> {
         let payload = json!({ "tag_name": tag, "name": title, "body": body, "draft": draft });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/releases", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/releases", self.slug(repo))))
             .json(&payload).send().await?;
         let v = Self::check(resp).await.context("create_release")?;
         Ok(v["html_url"].as_str().unwrap_or("").to_string())
@@ -131,12 +211,12 @@ impl Provider for GitHubProvider {
 
     async fn repo_meta(&self, repo: &str) -> Result<RepoMeta> {
         let resp = self.client
-            .get(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .get(self.url(&format!("repos/{}", self.slug(repo))))
             .send().await?;
         let v = Self::check(resp).await.context("repo_meta")?;
 
         let pr_resp = self.client
-            .get(self.url(&format!("repos/{}/{}/pulls?state=open&per_page=100", self.owner, repo)))
+            .get(self.url(&format!("repos/{}/pulls?state=open&per_page=100", self.slug(repo))))
             .send().await?;
         let open_prs = if pr_resp.status().is_success() {
             let pr_list: serde_json::Value = pr_resp.json().await.unwrap_or(serde_json::Value::Array(vec![]));
@@ -166,7 +246,7 @@ impl Provider for GitHubProvider {
     ) -> Result<()> {
         let body = json!({ "reviewers": reviewers });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/pulls/{}/requested_reviewers", self.owner, repo, pr_number)))
+            .post(self.url(&format!("repos/{}/pulls/{}/requested_reviewers", self.slug(repo), pr_number)))
             .json(&body).send().await?;
         Self::check(resp).await.context("request_reviewers")?;
         Ok(())
@@ -177,7 +257,7 @@ impl Provider for GitHubProvider {
     ) -> Result<()> {
         let body = json!({ "labels": labels });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/issues/{}/labels", self.owner, repo, issue_number)))
+            .post(self.url(&format!("repos/{}/issues/{}/labels", self.slug(repo), issue_number)))
             .json(&body).send().await?;
         Self::check(resp).await.context("add_labels")?;
         Ok(())
@@ -189,10 +269,19 @@ impl Provider for GitHubProvider {
         Ok(v["login"].as_str().unwrap_or("unknown").to_string())
     }
 
+    async fn count_search(&self, query: &str) -> Result<u64> {
+        let resp = self.client
+            .get(self.url("search/issues"))
+            .query(&[("q", query), ("per_page", "1")])
+            .send().await?;
+        let v = Self::check(resp).await.context("count_search")?;
+        Ok(v["total_count"].as_u64().unwrap_or(0))
+    }
+
     async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
         let body = serde_json::json!({ "private": private });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("update_visibility")?;
         Ok(())
@@ -201,7 +290,7 @@ impl Provider for GitHubProvider {
     async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
         let body = serde_json::json!({ "name": new_name });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("rename_repo")?;
         Ok(())
@@ -210,7 +299,7 @@ impl Provider for GitHubProvider {
     async fn archive_repo(&self, repo: &str) -> Result<()> {
         let body = serde_json::json!({ "archived": true });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("archive_repo")?;
         Ok(())
@@ -219,7 +308,7 @@ impl Provider for GitHubProvider {
     async fn update_description(&self, repo: &str, description: &str) -> Result<()> {
         let body = serde_json::json!({ "description": description });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("update_description")?;
         Ok(())
@@ -227,7 +316,7 @@ impl Provider for GitHubProvider {
 
     async fn list_pull_requests(&self, repo: &str) -> Result<Vec<PrDetail>> {
         let resp = self.client
-            .get(self.url(&format!("repos/{}/{}/pulls?state=open&per_page=100", self.owner, repo)))
+            .get(self.url(&format!("repos/{}/pulls?state=open&per_page=100", self.slug(repo))))
             .send().await?;
         if !resp.status().is_success() { return Ok(vec![]); }
         let list: Value = resp.json().await.unwrap_or(Value::Array(vec![]));
@@ -285,8 +374,23 @@ impl Provider for GitHubProvider {
     }
 }
 
+/// Parses a GitHub API RFC3339 timestamp into a Unix timestamp, defaulting
+/// to 0 on a parse failure rather than propagating an error for what's
+/// always a secondary/display-only field.
 fn parse_gh_ts(s: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.timestamp())
         .unwrap_or(0)
+}
+
+/// Pulls the `rel="next"` URL out of a GitHub pagination `Link` header, e.g.
+/// `<https://api.github.com/user/repos?page=2>; rel="next", <...>; rel="last"`.
+fn parse_next_link(link: &str) -> Option<String> {
+    link.split(',').find_map(|part| {
+        let part = part.trim();
+        if !part.contains("rel=\"next\"") { return None; }
+        let start = part.find('<')? + 1;
+        let end = part.find('>')?;
+        Some(part[start..end].to_string())
+    })
 }

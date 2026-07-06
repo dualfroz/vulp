@@ -1,3 +1,11 @@
+//! Git data access for the repo Detail view: commit/tag history, branch
+//! listing with ahead/behind counts, contributors, per-period commit
+//! activity (for the bar charts), the file tree, file preview, and the
+//! branch checkout/delete/push actions. Mixes `git2` for structured reads
+//! with shelling out to `git`/`sh` for the handful of queries (shortlog,
+//! line counts, date-bucketed log) that are far simpler as a one-line CLI
+//! pipe than as hand-rolled `git2` traversal.
+
 use super::{BranchEntry, ContribEntry, HistEntry, TreeNode};
 use crate::status::format_age_pub;
 use git2::{BranchType, Repository};
@@ -9,6 +17,11 @@ pub use crate::util::clipboard::copy_auto as copy_to_clipboard;
 
 // ── commit history ────────────────────────────────────────────────────────────
 
+/// Returns up to `limit` recent commits merged with all tags, newest first.
+/// Tags are appended and re-sorted alongside commits (rather than queried
+/// separately by the caller) so the history view can show them inline at
+/// their true chronological position; the `limit + 20` truncation leaves
+/// room for tags that would otherwise push real commits out of the window.
 pub fn build_history(path: &std::path::Path, limit: usize) -> Vec<HistEntry> {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return vec![] };
 
@@ -50,11 +63,12 @@ pub fn build_history(path: &std::path::Path, limit: usize) -> Vec<HistEntry> {
     }
 
     commits.extend(tags);
-    commits.sort_by(|a, b| b.ts().cmp(&a.ts()));
+    commits.sort_by_key(|c| std::cmp::Reverse(c.ts()));
     commits.truncate(limit + 20);
     commits
 }
 
+/// Total commit count on the current branch (`git rev-list --count HEAD`).
 pub fn total_commits(path: &std::path::Path) -> usize {
     std::process::Command::new("git")
         .arg("-C").arg(path).args(["rev-list", "--count", "HEAD"])
@@ -65,6 +79,7 @@ pub fn total_commits(path: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Number of tags in the repo.
 pub fn count_tags(path: &std::path::Path) -> usize {
     std::process::Command::new("git")
         .arg("-C").arg(path).args(["tag", "-l"])
@@ -73,6 +88,7 @@ pub fn count_tags(path: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Number of stash entries.
 pub fn count_stashes(path: &std::path::Path) -> usize {
     std::process::Command::new("git")
         .arg("-C").arg(path).args(["stash", "list"])
@@ -83,6 +99,7 @@ pub fn count_stashes(path: &std::path::Path) -> usize {
 
 // ── files ─────────────────────────────────────────────────────────────────────
 
+/// All tracked file paths, relative to the repo root (`git ls-files`).
 pub fn list_all_files(path: &std::path::Path) -> Vec<String> {
     let out = std::process::Command::new("git")
         .arg("-C").arg(path).args(["ls-files"])
@@ -94,6 +111,9 @@ pub fn list_all_files(path: &std::path::Path) -> Vec<String> {
         .lines().map(|l| l.to_string()).collect()
 }
 
+/// Total line count across tracked files (capped at the first 5000 files,
+/// since `wc -l` over an unbounded file list on a huge repo would be slow
+/// for a number that's only used as a rough stat).
 pub fn count_lines_of_code(path: &std::path::Path) -> usize {
     let out = std::process::Command::new("sh")
         .arg("-c")
@@ -103,12 +123,14 @@ pub fn count_lines_of_code(path: &std::path::Path) -> usize {
     match out {
         Ok(o) => {
             let s = String::from_utf8_lossy(&o.stdout);
-            s.trim().split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0)
+            s.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0)
         }
         Err(_) => 0,
     }
 }
 
+/// The `n` largest tracked files by line count, descending, for the repo
+/// stats view's "largest files" list.
 pub fn largest_files(path: &std::path::Path, n: usize) -> Vec<(String, usize)> {
     let out = std::process::Command::new("sh")
         .arg("-c")
@@ -134,6 +156,7 @@ pub fn largest_files(path: &std::path::Path, n: usize) -> Vec<(String, usize)> {
 
 // ── remote URL ────────────────────────────────────────────────────────────────
 
+/// The `origin` remote's URL, normalized to a browsable `https://` web URL.
 pub fn remote_url(path: &std::path::Path) -> Option<String> {
     let repo = Repository::open(path).ok()?;
     let remote = repo.find_remote("origin").ok()?;
@@ -143,6 +166,8 @@ pub fn remote_url(path: &std::path::Path) -> Option<String> {
 
 // ── branches ─────────────────────────────────────────────────────────────────
 
+/// Lists local branches with their upstream ahead/behind counts and last
+/// commit info, current branch first then alphabetically.
 pub fn list_branches(path: &std::path::Path) -> Vec<BranchEntry> {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return vec![] };
     let mut out = vec![];
@@ -183,6 +208,7 @@ pub fn list_branches(path: &std::path::Path) -> Vec<BranchEntry> {
 
 // ── contributors ─────────────────────────────────────────────────────────────
 
+/// Contributors by commit count across all branches (`git shortlog -sn --all`).
 pub fn list_contributors(path: &std::path::Path) -> Vec<ContribEntry> {
     let out = std::process::Command::new("git")
         .arg("-C").arg(path).args(["shortlog", "-sn", "--all"])
@@ -203,12 +229,19 @@ pub fn list_contributors(path: &std::path::Path) -> Vec<ContribEntry> {
 
 // ── commit activity (per period) ─────────────────────────────────────────────
 
+/// Commit counts bucketed by `date_fmt` (a `git log --date=format:` string),
+/// optionally restricted to the last `since_days` days. The shared engine
+/// behind all `activity_*` functions below, which differ only in bucket
+/// width and how many buckets they show.
 fn git_activity_raw(path: &std::path::Path, since_days: Option<u64>, date_fmt: &str) -> HashMap<String, usize> {
     let since_arg = since_days.map(|d| format!("--since={} days ago", d));
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C").arg(path).arg("log");
     if let Some(ref s) = since_arg { cmd.arg(s); }
-    cmd.args([&format!("--date=format:{}", date_fmt), "--pretty=format:%ad"]);
+    // format-local: buckets by the *local* timezone — plain `format:` uses
+    // whatever offset is embedded in each commit, so a commit from CI/UTC
+    // (or GitHub web UI) would land in the wrong day.
+    cmd.args([&format!("--date=format-local:{}", date_fmt), "--pretty=format:%ad"]);
     let out = cmd.output().unwrap_or_else(|_| std::process::Output {
         status: std::process::ExitStatus::default(), stdout: vec![], stderr: vec![]
     });
@@ -220,6 +253,7 @@ fn git_activity_raw(path: &std::path::Path, since_days: Option<u64>, date_fmt: &
     counts
 }
 
+/// Commits per hour over the last day, as 24 `"00"`–`"23"` buckets.
 pub fn activity_1d(path: &std::path::Path) -> Vec<(String, usize)> {
     let raw = git_activity_raw(path, Some(1), "%H");
     (0u32..24).map(|h| {
@@ -229,9 +263,11 @@ pub fn activity_1d(path: &std::path::Path) -> Vec<(String, usize)> {
     }).collect()
 }
 
+/// Commits per day over the last 7 days, as `"MM-DD"` buckets.
 pub fn activity_7d(path: &std::path::Path) -> Vec<(String, usize)> {
     let raw = git_activity_raw(path, Some(7), "%Y-%m-%d");
-    let now = chrono::Utc::now();
+    // Local, not Utc — labels must line up with format-local buckets.
+    let now = chrono::Local::now();
     (0i64..7).rev().map(|d| {
         let dt    = now - chrono::Duration::days(d);
         let label = dt.format("%Y-%m-%d").to_string();
@@ -241,9 +277,11 @@ pub fn activity_7d(path: &std::path::Path) -> Vec<(String, usize)> {
     }).collect()
 }
 
+/// Commits per day over the last 30 days, as `"DD"` buckets.
 pub fn activity_30d(path: &std::path::Path) -> Vec<(String, usize)> {
     let raw = git_activity_raw(path, Some(30), "%Y-%m-%d");
-    let now = chrono::Utc::now();
+    // Local, not Utc — labels must line up with format-local buckets.
+    let now = chrono::Local::now();
     (0i64..30).rev().map(|d| {
         let dt    = now - chrono::Duration::days(d);
         let label = dt.format("%Y-%m-%d").to_string();
@@ -253,9 +291,12 @@ pub fn activity_30d(path: &std::path::Path) -> Vec<(String, usize)> {
     }).collect()
 }
 
+/// Commits over the last 90 days, grouped into 13 weekly buckets labeled by
+/// each week's start date.
 pub fn activity_90d(path: &std::path::Path) -> Vec<(String, usize)> {
     let raw = git_activity_raw(path, Some(90), "%Y-%m-%d");
-    let now = chrono::Utc::now();
+    // Local, not Utc — labels must line up with format-local buckets.
+    let now = chrono::Local::now();
     // Group into 7-day buckets (13 weeks)
     (0usize..13).rev().map(|w| {
         let end_d   = (w * 7) as i64;
@@ -274,18 +315,26 @@ pub fn activity_90d(path: &std::path::Path) -> Vec<(String, usize)> {
     }).collect()
 }
 
+/// Commits per month over the last year, as 3-letter month buckets.
 pub fn activity_1y(path: &std::path::Path) -> Vec<(String, usize)> {
+    use chrono::Datelike;
     let raw = git_activity_raw(path, Some(365), "%Y-%m");
-    let now = chrono::Utc::now();
-    (0i64..12).rev().map(|m| {
-        let dt    = now - chrono::Duration::days(m * 30);
-        let label = dt.format("%Y-%m").to_string();
-        let short = dt.format("%b").to_string();
+    // Real month arithmetic — "now − m·30 days" drifts by a month within a
+    // year (months are 28-31 days) and duplicates/skips labels.
+    let now = chrono::Local::now();
+    let (y0, m0) = (now.year(), now.month() as i32);
+    (0i32..12).rev().map(|m| {
+        let total = y0 * 12 + (m0 - 1) - m;
+        let (y, mon) = (total.div_euclid(12), total.rem_euclid(12) + 1);
+        let label = format!("{:04}-{:02}", y, mon);
+        const MONTHS: [&str; 12] = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        let short = MONTHS[(mon - 1) as usize].to_string();
         let count = raw.get(&label).copied().unwrap_or(0);
         (short, count)
     }).collect()
 }
 
+/// Commits per year across the repo's full history, oldest first.
 pub fn activity_all(path: &std::path::Path) -> Vec<(String, usize)> {
     let raw = git_activity_raw(path, None, "%Y");
     let mut result: Vec<(String, usize)> = raw.into_iter().collect();
@@ -295,6 +344,8 @@ pub fn activity_all(path: &std::path::Path) -> Vec<(String, usize)> {
 
 // ── repo age ─────────────────────────────────────────────────────────────────
 
+/// Timestamp of the repo's very first commit, found by walking `HEAD`'s
+/// history to its end — used to compute repo age.
 pub fn repo_first_commit_ts(path: &std::path::Path) -> Option<i64> {
     let repo = Repository::open(path).ok()?;
     let mut rw = repo.revwalk().ok()?;
@@ -307,6 +358,10 @@ pub fn repo_first_commit_ts(path: &std::path::Path) -> Option<i64> {
 
 // ── file tree ────────────────────────────────────────────────────────────────
 
+/// Builds a flat, depth-ordered tree (directories before their children,
+/// each subtree alphabetical) from a flat list of repo-relative file paths
+/// — the shape the file-tree view renders directly without needing to walk
+/// a real nested structure at render time.
 pub fn build_tree(all_files: &[String]) -> Vec<TreeNode> {
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     for f in all_files {
@@ -343,6 +398,7 @@ pub fn build_tree(all_files: &[String]) -> Vec<TreeNode> {
     result
 }
 
+/// Recursively appends `prefix`'s children to `out` in display order, depth-first.
 fn flatten_tree(
     prefix: &str,
     dir_children: &BTreeMap<String, Vec<String>>,
@@ -366,6 +422,9 @@ fn flatten_tree(
 
 // ── file preview ─────────────────────────────────────────────────────────────
 
+/// Reads the first `max_lines` lines of `rel` for the file-tree preview
+/// pane, detecting binary content via a null-byte check on the first 512
+/// bytes rather than rendering it as garbled text.
 pub fn read_file_preview(repo_path: &std::path::Path, rel: &str, max_lines: usize) -> Vec<String> {
     let full = repo_path.join(rel);
     let bytes = match std::fs::read(&full) {
@@ -381,14 +440,17 @@ pub fn read_file_preview(repo_path: &std::path::Path, rel: &str, max_lines: usiz
 
 // ── branch actions ───────────────────────────────────────────────────────────
 
+/// Checks out `name`, returning whether the command succeeded.
 pub fn checkout_branch(path: &std::path::Path, name: &str) -> bool {
     git_run_ok(path, &["checkout", name])
 }
 
+/// Deletes local branch `name` (`git branch -d`, fails if unmerged).
 pub fn delete_branch(path: &std::path::Path, name: &str) -> bool {
     git_run_ok(path, &["branch", "-d", name])
 }
 
+/// Pushes `name` to `origin`, setting it as the upstream (`git push -u`).
 pub fn push_branch(path: &std::path::Path, name: &str) -> bool {
     git_run_ok(path, &["push", "-u", "origin", name])
 }

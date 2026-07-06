@@ -1,6 +1,14 @@
+//! Cross-repo todo list (`~/.vulp/todos.toml`), shared by the hub's Todos
+//! tab and each repo detail view's per-repo Todos tab. Todos are either
+//! manually created or scanned from `TODO`/`FIXME`/`HACK` comments in
+//! source (`TodoSource`) — the hub's default Todos view shows only manual
+//! ones, since scanned todos are meant to be reviewed and promoted
+//! deliberately rather than flooding the list automatically.
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// A todo's workflow state, cycled in a fixed order by the `Space` key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TodoStatus {
     Open,
@@ -10,6 +18,7 @@ pub enum TodoStatus {
 }
 
 impl TodoStatus {
+    /// Display label shown in todo tables and the status-picker modal.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Open       => "Open",
@@ -18,6 +27,7 @@ impl TodoStatus {
             Self::Cancelled  => "Cancelled",
         }
     }
+    /// Status color used in todo tables.
     pub fn color(&self) -> ratatui::style::Color {
         use ratatui::style::Color;
         match self {
@@ -27,6 +37,8 @@ impl TodoStatus {
             Self::Cancelled  => Color::DarkGray,
         }
     }
+    /// Advances to the next status in the fixed Open → InProgress → Done →
+    /// Cancelled → Open cycle, bound to the `Space` key on the Todos tab.
     pub fn cycle(&self) -> Self {
         match self {
             Self::Open       => Self::InProgress,
@@ -35,18 +47,16 @@ impl TodoStatus {
             Self::Cancelled  => Self::Open,
         }
     }
-    pub fn idx(&self) -> usize {
-        match self {
-            Self::Open => 0, Self::InProgress => 1,
-            Self::Done => 2, Self::Cancelled  => 3,
-        }
-    }
+    /// Maps the status-picker modal's selected index back to a `TodoStatus`,
+    /// defaulting to `Open` for any out-of-range index.
     pub fn from_idx(i: usize) -> Self {
         match i { 1 => Self::InProgress, 2 => Self::Done, 3 => Self::Cancelled, _ => Self::Open }
     }
+    /// One-character glyph shown next to the status label in todo tables.
     pub fn icon(&self) -> &'static str {
         match self { Self::Open => "○", Self::InProgress => "◎", Self::Done => "●", Self::Cancelled => "×" }
     }
+    /// All status labels in display order, for the status-picker modal.
     pub fn all_labels() -> Vec<&'static str> {
         vec!["Open", "In Progress", "Done", "Cancelled"]
     }
@@ -61,11 +71,13 @@ pub enum TodoSource {
 }
 
 impl TodoSource {
+    /// One-character glyph shown next to a todo's title to mark its origin.
     pub fn icon(&self) -> &'static str {
         match self { Self::Manual => "✎", Self::CodeScan => "⌂" }
     }
 }
 
+/// One todo item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Todo {
     pub id:          u64,
@@ -88,6 +100,7 @@ pub struct Todo {
 }
 
 impl Todo {
+    /// Creates a manually-entered todo, timestamped now.
     pub fn new(
         id: u64, title: String, description: String,
         status: TodoStatus, project: Option<String>,
@@ -99,6 +112,8 @@ impl Todo {
                created_at: now, updated_at: now }
     }
 
+    /// Creates a todo discovered by the source-code `TODO`/`FIXME`/`HACK`
+    /// scanner, tagged with the repo it came from and `TodoSource::CodeScan`.
     pub fn new_scan(
         id: u64, title: String, repo: String,
     ) -> Self {
@@ -110,6 +125,8 @@ impl Todo {
                created_at: now, updated_at: now }
     }
 
+    /// Updates `updated_at` to now — called on every edit so "last touched"
+    /// stays meaningful.
     pub fn touch(&mut self) {
         self.updated_at = chrono::Utc::now().timestamp();
     }
@@ -122,9 +139,11 @@ struct TodosFile {
 }
 
 fn file_path() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".fxg").join("todos.toml")
+    dirs::home_dir().unwrap_or_default().join(".vulp").join("todos.toml")
 }
 
+/// Loads every todo (manual and code-scanned) from disk, or an empty list
+/// if the file doesn't exist or fails to parse.
 pub fn load() -> Vec<Todo> {
     let p = file_path();
     if !p.exists() { return Vec::new(); }
@@ -138,6 +157,7 @@ pub fn load_manual() -> Vec<Todo> {
     load().into_iter().filter(|t| t.source == TodoSource::Manual).collect()
 }
 
+/// Overwrites the todos file with `todos`.
 pub fn save(todos: &[Todo]) -> anyhow::Result<()> {
     let p = file_path();
     if let Some(parent) = p.parent() { std::fs::create_dir_all(parent)?; }
@@ -145,16 +165,8 @@ pub fn save(todos: &[Todo]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Purge all CodeScan todos from the saved file.
-pub fn purge_code_scan() -> anyhow::Result<usize> {
-    let all = load();
-    let before = all.len();
-    let manual: Vec<Todo> = all.into_iter().filter(|t| t.source == TodoSource::Manual).collect();
-    let removed = before - manual.len();
-    save(&manual)?;
-    Ok(removed)
-}
-
+/// The next unused todo id — one past the current maximum, or 1 if the list
+/// is empty.
 pub fn next_id(todos: &[Todo]) -> u64 {
     todos.iter().map(|t| t.id).max().unwrap_or(0) + 1
 }

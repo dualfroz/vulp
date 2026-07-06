@@ -1,13 +1,32 @@
-mod actions;
+// pub: the CLI (`cli_cmds`) reuses the bookmark/pin persistence and
+// remote-url helpers instead of duplicating them.
+pub mod actions;
 mod keys;
+mod keys_dispatch;
+mod keys_poll;
 mod modals;
+mod modals_confirm_project;
+mod modals_confirm_repo;
+mod modals_confirm_settings;
+mod modals_confirm_sync;
+mod modals_spawn;
 mod project_detail;
+mod project_detail_render;
 mod render;
 mod right_panel;
+mod session;
 mod state;
+mod state_bg;
+mod state_misc;
+mod state_modal;
+mod state_rows;
 mod tabs;
+mod tabs_overview;
+mod tabs_settings;
+mod tabs_stats;
+mod tabs_tables;
 
-use actions::{exec_api_refresh, load_bookmarks, load_pins, load_templates, refresh_repos, run_sync_flow};
+use actions::{load_bookmarks, load_pins, load_templates, refresh_repos, run_sync_flow};
 use keys::tui_phase;
 use state::{HubState, Modal, PhaseResult, SortMode, Tab};
 
@@ -16,9 +35,36 @@ use crate::config::AppConfig;
 use crate::projects;
 use crate::providers::{IssueDetail, PrDetail};
 use crate::status::RepoSummary;
-use crossterm::event::KeyCode;
-use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
+
+/// Kicks off a one-time, best-effort fetch of release info for the General
+/// Settings tile: the very latest GitHub release (for the update check) and
+/// the release matching the version actually running (for "shipped by X on
+/// Y"). Unauthenticated, so it works with zero accounts configured.
+fn spawn_release_info_fetch(state: &mut HubState) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let gh_users: Vec<String> = state.accounts.iter()
+        .filter(|a| a.provider == "github" && a.base_url.is_none())
+        .map(|a| a.username.clone())
+        .collect();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() { Ok(rt) => rt, Err(_) => return };
+        let (latest, current, since) = rt.block_on(async {
+            let latest  = crate::release_info::fetch_latest().await.map_err(|e| format!("{e:#}"));
+            let current = crate::release_info::fetch_current(&version).await.map_err(|e| format!("{e:#}"));
+            let mut since = Vec::new();
+            for user in &gh_users {
+                if let Ok(date) = crate::release_info::fetch_user_since(user).await {
+                    if !date.is_empty() { since.push((user.clone(), date)); }
+                }
+            }
+            (latest, current, since)
+        });
+        let _ = tx.send((latest, current, since));
+    });
+    state.release_rx = Some(rx);
+}
 
 pub async fn run_overview_tui(
     mut repos: Vec<RepoSummary>,
@@ -55,7 +101,7 @@ pub async fn run_overview_tui(
         prs:    cached_prs,
         issues: cached_issues,
         tab: Tab::Overview,
-        display: Vec::new(), repo_pos: Vec::new(),
+        display: Vec::new(),
         cursor: 0, offset: 0, visible_rows: 0,
         selected: HashSet::new(),
         filter_dirty: false, filter_behind: false, filter_ahead: false,
@@ -81,6 +127,11 @@ pub async fn run_overview_tui(
         global_stats: None,
         global_stats_rx: None,
         global_stats_period: crate::detail::StatsPeriod::Day30,
+        activity_feed: None,
+        activity_rx: None,
+        activity_filter: None,
+        vulp_log: Vec::new(),
+        pending_cursor_restore: None,
         hub_settings_cur: 0,
         accounts,
         templates,
@@ -88,16 +139,45 @@ pub async fn run_overview_tui(
         pending_sync_msg:    None,
         pending_phase:       None,
         pull_all_rx:         None,
+        refresh_rx:          None,
+        create_repo_rx:      None,
+        profile_pull_rx:     None,
+        codeintel_rx:        None,
+        latest_release:      None,
+        current_release:     None,
+        account_since:       HashMap::new(),
+        closed_counts:       None,
+        release_rx:          None,
+        cfg:                 cfg.clone(),
     };
     for r in &mut state.repos {
         r.bookmarked = state.bookmarks.contains(&r.path);
     }
+    // Restore last session's tab + remember which repo to re-focus once the
+    // scan finishes (cursor can't be set yet — repos stream in unsorted).
+    let session = session::load();
+    state.tab = session::u8_to_tab(session.tab);
+    state.pending_cursor_restore = session.cursor_repo_path;
     state.rebuild_display();
+    spawn_release_info_fetch(&mut state);
+    // Tab starts on Overview, which now needs global stats (top repos/projects)
+    // and the local vulp action log for its tiles.
+    keys::maybe_load_global_stats(&mut state);
+    crate::activity::compact(5000);
+    state.vulp_log = {
+        let mut log = crate::activity::load_logged();
+        log.sort_by(|a, b| b.ts.cmp(&a.ts));
+        log.truncate(50);
+        log
+    };
 
     loop {
         let (phase_result, handed_term) = tui_phase(&mut state)?;
 
-        if state.quit { break; }
+        if state.quit {
+            session::save(state.tab, state.cur_repo_idx().map(|ri| state.repos[ri].path.clone()));
+            break;
+        }
 
         match phase_result {
             PhaseResult::OpenDetail => {
@@ -110,6 +190,10 @@ pub async fn run_overview_tui(
                         repo_indices.iter().filter_map(|&ri| state.repos.get(ri)).cloned().collect();
                     project_detail::run(state.projects[pi].clone(), proj_repos, cfg, handed_term).await?;
                 }
+                // Detail view can rename/delete/archive repos or change branches —
+                // rescan so the hub's list reflects whatever just happened, instead
+                // of silently showing stale data until some other action refreshes it.
+                refresh_repos(&mut state);
             }
             PhaseResult::ExecSync => {
                 state.exec_action = false;
@@ -139,22 +223,6 @@ pub async fn run_overview_tui(
                 let _ = std::io::stdin().lines().next();
                 refresh_repos(&mut state);
             }
-            PhaseResult::ExecRefresh => {
-                exec_api_refresh(&mut state, cfg).await;
-            }
-            PhaseResult::ExecTemplateInit { path, commands } => {
-                println!("\n── Running template commands ──\n");
-                for cmd in &commands {
-                    println!("  $ {}", cmd);
-                    let _ = std::process::Command::new("sh")
-                        .args(["-c", cmd.as_str()])
-                        .current_dir(&path)
-                        .status();
-                }
-                println!("\n  ✓ Done. Press Enter...");
-                let _ = std::io::stdin().lines().next();
-                refresh_repos(&mut state);
-            }
             PhaseResult::ExecOpenEditor(path) => {
                 let editor = state.editor.clone();
                 let _ = std::process::Command::new(&editor).arg(&path).status();
@@ -163,30 +231,4 @@ pub async fn run_overview_tui(
         }
     }
     Ok(())
-}
-
-
-pub fn run_detail_tui(detail: crate::status::RepoDetail) -> Result<()> {
-    use crossterm::event::Event;
-    use ratatui::widgets::{Block, Borders, Paragraph};
-    let mut quit = false;
-    crate::tui::run_loop(|terminal| {
-        terminal.draw(|f| {
-            let area = f.area();
-            let blk  = Block::default().title(format!(" {} · {} ", detail.summary.name, detail.summary.branch)).borders(Borders::ALL);
-            let inner = blk.inner(area);
-            f.render_widget(blk, area);
-            let lines = vec![
-                Line::from(format!("  Branch: {}  +{} ahead  -{} behind  dirty: {}", detail.summary.branch, detail.summary.ahead, detail.summary.behind, detail.summary.is_dirty)),
-                Line::from(format!("  Path: {}", detail.summary.path.display())),
-                Line::from(""),
-                Line::from("  Modified files:"),
-            ];
-            f.render_widget(Paragraph::new(lines), inner);
-        })?;
-        if let Some(Event::Key(key)) = crate::tui::next_event(250)? {
-            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) { quit = true; }
-        }
-        Ok(quit)
-    })
 }

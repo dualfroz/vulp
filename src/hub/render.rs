@@ -1,3 +1,8 @@
+//! Top-level draw routine for the hub: the tab bar, the 73/27 split between
+//! the tab body (`tabs::render_list`) and the right info panel
+//! (`right_panel::render_right`), the bottom hint/debug bar, and the modal
+//! overlay.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -10,20 +15,27 @@ use super::right_panel::render_right;
 use super::state::{HubState, SortMode, Tab};
 use super::tabs::render_list;
 
+/// Full key-binding reference shown by the `?` help modal.
+/// KEEP IN SYNC with `keys_dispatch.rs` (and the `[m]` menu in
+/// `modals_spawn::open_action_menu`) — stale entries here are a bug.
 pub static HELP_LINES: &[&str] = &[
     "── Navigation ───────────────────────────────",
+    " m            Action menu for current tab/selection",
     " ↑↓ / jk     Move cursor up/down",
-    " Tab          Switch tab (Repos → Projects → Todos → PRs → Issues)",
-    " Enter        Open repo/project detail view",
+    " Tab / ←→    Switch tab",
+    " 1-9          Jump straight to a tab",
+    " Enter        Open repo/project detail (browser for PRs/issues)",
     " q / Esc      Quit (or clear active filter)",
     "",
     "── Filtering & Sorting ───────────────────────",
     " /            Fuzzy filter repos (name, branch, owner, lang)",
-    " S            Cycle sort: Default → Name → Recent → Dirty↑ → Behind↑",
+    " S            Sort & filter menu",
     " d            Toggle: show only dirty repos",
     " b            Toggle: show only behind repos",
     " f            Toggle: show only ahead repos",
-    " a            Toggle: show only archived repos (no commits >90d)",
+    " a            Toggle: show archived repos (no commits >90d)",
+    " *            Select repos by condition",
+    " Ctrl+A       Select / deselect all visible repos",
     "",
     "── Open / Navigate ───────────────────────────",
     " o            Open repo in $EDITOR",
@@ -31,8 +43,8 @@ pub static HELP_LINES: &[&str] = &[
     " W            Open repo in browser (GitHub/GitLab)",
     " y            Copy repo path to clipboard",
     " u            Copy remote URL to clipboard",
+    " Ctrl+U       Copy URL picker (SSH vs HTTPS)",
     " g            Open .gitignore in $EDITOR",
-    " C            Clone a repository into workspace",
     "",
     "── Repo Actions ──────────────────────────────",
     " s            Sync (pull / commit+push) selected repos",
@@ -40,6 +52,8 @@ pub static HELP_LINES: &[&str] = &[
     " B            Toggle bookmark (★) — visible in table",
     " P            Toggle pin (◆) — pinned repos shown at top",
     " n            Rename/label repo display name",
+    " N            New repository (clone / create / link)",
+    " R            Refresh metadata from provider API",
     " Space        Select repo for batch action",
     "",
     "── Projects & Todos ──────────────────────────",
@@ -49,12 +63,17 @@ pub static HELP_LINES: &[&str] = &[
     " Space        (Todos tab) Cycle todo status",
     " D / Del      Delete todo or project",
     " T            Scan repos for TODO/FIXME/HACK → import to Todos",
+    " X            (Todos tab) Toggle code-scan todos",
     "",
     "── Help ──────────────────────────────────────",
     " ?            Show this help",
+    " v            (Overview) Open release notes in browser",
     " Esc / q      Close modal or quit",
 ];
 
+/// Draws the entire hub frame: top tab bar, the current tab's body plus
+/// right panel (or the debug log, in debug mode), and either a contextual
+/// hint line or the active modal on top of everything.
 pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     let area = f.area();
     let bottom_h: u16 = if state.debug_mode { 11 } else { 3 };
@@ -70,7 +89,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
             Span::styled(format!(" {} ", label), Style::default().fg(Color::DarkGray))
         }
     };
-    let n = state.repo_pos.len();
+    let n = state.display.len();
     let pos_str = format!("  {}/{}", if n == 0 { 0 } else { state.cursor + 1 }, n);
 
     let behind_c = state.repos.iter().filter(|r| r.behind > 0).count();
@@ -86,7 +105,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     let issue_badge = if !state.issues.is_empty() { format!("6 Issues({})", state.issues.len()) } else { "6 Issues".into() };
 
     let mut top_spans = vec![
-        Span::styled(" fxg  ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" vulp  ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         tab_span("1 Overview",    state.tab == Tab::Overview),
         Span::raw(" "),
         tab_span("2 Repos",       state.tab == Tab::Repos),
@@ -101,7 +120,9 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         Span::raw(" "),
         tab_span("7 Stats",       state.tab == Tab::Stats),
         Span::raw(" "),
-        tab_span("8 Settings",    state.tab == Tab::HubSettings),
+        tab_span("8 Activity",    state.tab == Tab::Activity),
+        Span::raw(" "),
+        tab_span("9 Settings",    state.tab == Tab::HubSettings),
         Span::raw("   "),
     ];
 
@@ -137,7 +158,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     f.render_widget(Paragraph::new(Line::from(top_spans)), outer[0]);
 
     if state.tab == Tab::Overview {
-        super::tabs::render_overview_global(f, state, outer[1]);
+        super::tabs_overview::render_overview_global(f, state, outer[1]);
     } else {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -203,18 +224,18 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
                 Line::from(""),
             ]
         } else {
-            match state.tab {
-                Tab::PRs | Tab::Issues => vec![
-                    Line::from(vec![key("↑↓/jk"), Span::styled("navigate  ", dim), key("Tab/←→"), Span::styled("switch tab  ", dim), key("↵"), Span::styled("open in browser  ", dim), key("R"), Span::styled("refresh API  ", dim), key("?"), Span::styled("help  ", dim), key("q"), Span::styled("quit", dim)]),
-                    Line::from(""),
-                    line3,
-                ],
-                _ => vec![
-                    Line::from(vec![key("↑↓/jk"), Span::styled("navigate  ", dim), key("Tab/←→"), Span::styled("tabs  ", dim), key("/"), Span::styled("filter  ", dim), key("S"), Span::styled("sort & filter  ", dim), key("?"), Span::styled("help  ", dim), key("q"), Span::styled("quit", dim)]),
-                    Line::from(vec![key("Space"), Span::styled("select  ", dim), key("R"), Span::styled("API refresh  ", dim), key("N"), Span::styled("new repo", dim)]),
-                    line3,
-                ],
-            }
+            vec![
+                Line::from(vec![
+                    key("m"), Span::styled("actions  ", dim),
+                    key("↑↓/jk"), Span::styled("navigate  ", dim),
+                    key("Tab/←→"), Span::styled("tabs  ", dim),
+                    key("/"), Span::styled("filter  ", dim),
+                    key("?"), Span::styled("help  ", dim),
+                    key("q"), Span::styled("quit", dim),
+                ]),
+                Line::from(""),
+                line3,
+            ]
         };
         f.render_widget(Paragraph::new(hint_lines), outer[2]);
     }

@@ -1,11 +1,13 @@
 [package]
-name = "fxg"
+name = "vulp"
 version = "0.1.0"
 edition = "2021"
 description = "Multi-repo git workflow manager"
+authors = ["dualfroz"]
+build = "build.rs"
 
 [[bin]]
-name = "fxg"
+name = "vulp"
 path = "src/main.rs"
 
 [dependencies]
@@ -15,12 +17,21 @@ chrono       = { version = "0.4", features = ["serde"] }
 clap         = { version = "4", features = ["derive"] }
 crossterm    = "0.28"
 dirs         = "5"
-git2         = "0.19"
+futures      = "0.3"
+git2         = { version = "0.19", features = ["vendored-openssl", "vendored-libgit2"] }
 inquire      = "0.7"
 keyring      = "3"
 ratatui      = "0.28"
+libc         = "0.2"
 reqwest      = { version = "0.12", features = ["json"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
+signal-hook  = "0.3"
 tokio        = { version = "1", features = ["full"] }
 toml         = "0.8"
+tree-sitter = "0.26.9"
+tree-sitter-rust = "0.24.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-go = "0.25.0"

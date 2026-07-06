@@ -1,3 +1,8 @@
+//! `Provider` — the trait every hosting backend (GitHub, GitLab, Gitea/
+//! Forgejo) implements, plus the data types its methods exchange and the
+//! `make_provider`/`default_account` helpers that pick and construct the
+//! right implementation for a given `Account`.
+
 mod gitea;
 mod github;
 mod gitlab;
@@ -11,6 +16,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Result of creating a remote repository: its clone URLs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoInfo {
     pub name:    String,
@@ -18,12 +24,26 @@ pub struct RepoInfo {
     pub ssh_url: String,
 }
 
+/// Which categories of remote repos to include in a bulk import. `owner` is
+/// always true in practice (the user's own repos) — kept as a field rather
+/// than implied so all three read the same way at the call site.
+#[derive(Debug, Clone, Default)]
+pub struct RepoAffiliation {
+    pub owner:         bool,
+    pub collaborator:  bool,
+    pub org_member:    bool,
+}
+
+/// Result of creating a pull/merge request or issue: just enough to link
+/// back to it (full detail, when needed, comes from `list_pull_requests`).
 #[derive(Debug, Clone)]
 pub struct PrInfo {
     pub number: u64,
     pub url:    String,
 }
 
+/// Basic repo metadata fetched for the Settings tab and the hub's cached
+/// stars/issues/PRs counts.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct RepoMeta {
@@ -34,6 +54,8 @@ pub struct RepoMeta {
     pub topics:       Vec<String>,
 }
 
+/// One pull/merge request, as shown in the hub's PRs tab and the repo
+/// detail view's PRs tab.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrDetail {
     pub repo:        String,
@@ -49,6 +71,8 @@ pub struct PrDetail {
     pub labels:      Vec<String>,
 }
 
+/// One issue, as shown in the hub's Issues tab and the repo detail view's
+/// Issues tab.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IssueDetail {
     pub repo:       String,
@@ -62,13 +86,34 @@ pub struct IssueDetail {
     pub comments:   u32,
 }
 
+/// A hosting backend's API surface. Methods that not every provider
+/// implements (`list_orgs`, `list_repos`, optional repo settings) have a
+/// default that either returns an empty result or bails with a clear
+/// "not supported" error, so callers can call any method on any provider
+/// without matching on which one it is.
 #[async_trait]
 #[allow(dead_code)]
 pub trait Provider: Send + Sync {
-    /// Create a new remote repository.
+    /// Create a new remote repository. `owner` is `Some(org)` to create it
+    /// under an organization/group instead of the authenticated user's
+    /// personal account.
     async fn create_repo(
-        &self, name: &str, private: bool, description: &str,
+        &self, name: &str, private: bool, description: &str, owner: Option<&str>,
     ) -> Result<RepoInfo>;
+
+    /// Organizations/groups the authenticated user can create repos under.
+    /// Empty by default — providers without a sensible equivalent just don't
+    /// offer the picker.
+    async fn list_orgs(&self) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+
+    /// List repos visible to the authenticated user matching the given
+    /// affiliation flags. Empty by default — providers without a sensible
+    /// equivalent just don't offer bulk import.
+    async fn list_repos(&self, _affiliation: &RepoAffiliation) -> Result<Vec<RepoInfo>> {
+        Ok(vec![])
+    }
 
     /// Delete a remote repository.
     async fn delete_repo(&self, name: &str) -> Result<()>;
@@ -83,6 +128,12 @@ pub trait Provider: Send + Sync {
     async fn create_pull_request(
         &self, repo: &str, title: &str, body: &str, head: &str, base: &str,
     ) -> Result<PrInfo>;
+
+    /// Open a new issue. Not every provider's API is wired up yet — default
+    /// bails the same way other not-yet-implemented methods on this trait do.
+    async fn create_issue(&self, _repo: &str, _title: &str, _body: &str) -> Result<PrInfo> {
+        anyhow::bail!("create_issue not supported by this provider")
+    }
 
     /// Request reviewers for an open pull request / merge request.
     async fn request_reviewers(
@@ -117,6 +168,13 @@ pub trait Provider: Send + Sync {
     /// List open issues for a repository (excludes PRs).
     async fn list_issues(&self, _repo: &str) -> Result<Vec<IssueDetail>> {
         Ok(vec![])
+    }
+
+    /// Total hit count for a provider-side issue/PR search query (e.g.
+    /// "is:pr is:merged user:X") — used by the Overview tab's merged/closed
+    /// counters. Providers without a search API report nothing.
+    async fn count_search(&self, _query: &str) -> Result<u64> {
+        anyhow::bail!("count_search not supported by this provider")
     }
 
     /// Verify the token works, return the authenticated username.

@@ -1,11 +1,7 @@
-#![allow(dead_code, unused_imports, unused_variables, unused_mut, unused_must_use)]
+//! Functions carried over from `vulp`'s pre-TUI CLI command set, kept only
+//! where the TUI hub still calls into them directly: onboarding an existing
+//! local folder onto a remote (`adopt`) and scanning source for `TODO`/
+//! `FIXME`/`HACK` comments (`refactor`).
+
 pub mod adopt;
-pub mod init;
-pub mod manage;
-pub mod menu;
 pub mod refactor;
-pub mod release;
-pub mod stats;
-pub mod summary;
-pub mod sync;
-pub mod util;

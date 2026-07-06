@@ -1,45 +1,214 @@
+//! Command-line surface: `clap` argument definitions. `vulp` with no
+//! subcommand launches the TUI hub; every hub operation is also reachable
+//! through a subcommand here so scripts and AI agents can drive vulp without
+//! a terminal UI. Machine consumers: pass `--json` and see `docs/cli.md`.
+//!
+//! Exit codes: 0 ok · 1 execution error · 2 bad usage (clap) ·
+//! 3 auth missing/invalid · 4 not found (repo/todo/project).
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "fxg", about = "Multi-repo git workflow manager", version)]
+#[command(name = "vulp", about = "Multi-repo git workflow manager", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
     /// Show timing debug panel at bottom of TUI
     #[arg(long, hide = true)]
     pub debug: bool,
+    /// Machine-readable JSON output on stdout (list/status/stats/... commands)
+    #[arg(long, global = true)]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Configure fxg settings
+    /// Configure vulp settings
     Config,
     /// Manage provider accounts
     Auth(AuthArgs),
-    /// Initialize new repositories
-    Init(InitArgs),
-    /// View repository status
-    Status(StatusArgs),
-    /// Sync repositories (pull / commit / push / branch / PR)
-    Sync(SyncArgs),
-    /// Manage releases, tags and changelogs
-    Release(ReleaseArgs),
-    /// Rename, find and clean code
-    Refactor(RefactorArgs),
-    /// Code statistics and metrics
-    Stats(StatsArgs),
-    /// Manage repo workspaces
-    Workspace(WorkspaceArgs),
-    /// Summarize repository structure, languages, git history and dependencies
-    Summary(SummaryArgs),
-    /// Import existing local folders into git + create remote repo
-    Adopt(AdoptArgs),
-    /// Manage remote repo properties (visibility, topics, rename, delete, archive)
-    Manage(ManageArgs),
-    /// Utility commands: unified log, secret scanning, doc generation
-    Util(UtilArgs),
+
+    /// List workspace repos (name, branch, dirty/ahead/behind, language)
+    List {
+        /// Only repos with uncommitted changes
+        #[arg(long)] dirty: bool,
+        /// Only repos behind their remote
+        #[arg(long)] behind: bool,
+        /// Only repos ahead of their remote
+        #[arg(long)] ahead: bool,
+        /// Filter by language (substring, case-insensitive)
+        #[arg(long)] lang: Option<String>,
+        /// Filter by vulp project name
+        #[arg(long)] project: Option<String>,
+    },
+    /// Detailed status of one repo
+    Status { repo: String },
+    /// Rescan the workspace and print a summary
+    Scan,
+
+    /// Pull/push/commit+push one or more repos
+    Sync {
+        /// Repo names (omit with --all or --project)
+        repos: Vec<String>,
+        /// Sync every repo in the workspace
+        #[arg(long)] all: bool,
+        /// Sync every repo in a vulp project
+        #[arg(long)] project: Option<String>,
+        /// pull | push | commit-push
+        #[arg(long, default_value = "pull")] action: String,
+        /// Commit message (required for commit-push)
+        #[arg(short, long)] message: Option<String>,
+    },
+    /// Tag a release and publish it on the provider
+    Release {
+        repo: String,
+        /// Tag, e.g. v1.2.0
+        #[arg(long)] tag: String,
+        /// Release notes body
+        #[arg(long, default_value = "")] notes: String,
+    },
+
+    /// Manage todos
+    Todo {
+        #[command(subcommand)]
+        action: TodoCmd,
+    },
+    /// List / create pull requests
+    Pr {
+        #[command(subcommand)]
+        action: PrCmd,
+    },
+    /// List / create issues
+    Issue {
+        #[command(subcommand)]
+        action: IssueCmd,
+    },
+    /// Manage vulp projects (repo groupings)
+    Project {
+        #[command(subcommand)]
+        action: ProjectCmd,
+    },
+    /// Per-repo utilities (url/path/open/label/bookmark/pin/collab)
+    Repo {
+        #[command(subcommand)]
+        action: RepoCmd,
+    },
+    /// Create a new repo: local init + create on provider + push
+    Init {
+        name: String,
+        /// Create as private on the provider
+        #[arg(long)] private: bool,
+        /// Repo description
+        #[arg(long, default_value = "")] description: String,
+    },
+
+    /// Workspace-wide commit statistics
+    Stats {
+        /// 1d | 7d | 30d | 90d | 1y | all
+        #[arg(long, default_value = "30d")] period: String,
+    },
+    /// Recent vulp-performed actions (activity log)
+    Activity {
+        #[arg(long, default_value_t = 20)] limit: usize,
+        /// commit | push | pull | release | new repo | todo | pr | issue
+        #[arg(long)] kind: Option<String>,
+    },
+    /// List configured provider accounts
+    Accounts,
+    /// Fetch metadata/PRs/issues + merged/closed counters from provider APIs
+    Refresh,
 }
 
+#[derive(Subcommand)]
+pub enum TodoCmd {
+    /// List todos
+    List {
+        /// open | in-progress | done | cancelled
+        #[arg(long)] status: Option<String>,
+    },
+    /// Add a todo
+    Add {
+        title: String,
+        #[arg(long, default_value = "")] desc: String,
+        #[arg(long)] project: Option<String>,
+    },
+    /// Mark a todo done
+    Done { id: u64 },
+    /// Mark a todo in-progress
+    Start { id: u64 },
+    /// Mark a todo cancelled
+    Cancel { id: u64 },
+    /// Delete a todo
+    Rm { id: u64 },
+}
+
+#[derive(Subcommand)]
+pub enum PrCmd {
+    /// List cached open PRs (run `vulp refresh` first for fresh data)
+    List {
+        #[arg(long)] repo: Option<String>,
+    },
+    /// Open a pull request on the provider
+    Create {
+        #[arg(long)] repo: String,
+        #[arg(long)] title: String,
+        #[arg(long)] head: String,
+        #[arg(long, default_value = "main")] base: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum IssueCmd {
+    /// List cached open issues (run `vulp refresh` first for fresh data)
+    List {
+        #[arg(long)] repo: Option<String>,
+    },
+    /// Open an issue on the provider
+    Create {
+        #[arg(long)] repo: String,
+        #[arg(long)] title: String,
+        #[arg(long, default_value = "")] body: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProjectCmd {
+    /// List projects with their repos
+    List,
+    /// Create a project
+    Create {
+        name: String,
+        /// Hex color, e.g. "#e74c3c"
+        #[arg(long, default_value = "#3da7ff")] color: String,
+    },
+    /// Assign repos to a project
+    Assign { name: String, repos: Vec<String> },
+    /// Delete a project (repos stay on disk)
+    Rm { name: String },
+}
+
+#[derive(Subcommand)]
+pub enum RepoCmd {
+    /// Print the repo's remote URL
+    Url { repo: String },
+    /// Print the repo's absolute path
+    Path { repo: String },
+    /// Open the repo page in the browser
+    Open { repo: String },
+    /// Set/clear the repo's display label (empty = reset)
+    Label { repo: String, #[arg(default_value = "")] name: String },
+    /// Toggle bookmark
+    Bookmark { repo: String },
+    /// Toggle pin
+    Pin { repo: String },
+    /// Invite a collaborator
+    Collab {
+        repo: String,
+        user: String,
+        /// pull | push | admin
+        #[arg(long, default_value = "push")] role: String,
+    },
+}
 
 #[derive(Args)]
 pub struct AuthArgs {
@@ -47,6 +216,10 @@ pub struct AuthArgs {
     pub action: Option<AuthAction>,
 }
 
+/// `vulp auth` subcommands. Account state is a flat list of credentials
+/// (one per provider account); `Switch` changes which one is the default
+/// rather than removing the others, so multiple accounts can stay configured
+/// at once.
 #[derive(Subcommand)]
 pub enum AuthAction {
     Add {
@@ -60,247 +233,4 @@ pub enum AuthAction {
     Remove  { account: String },
     Switch  { account: String },
     Test    { account: Option<String> },
-}
-
-
-#[derive(Args)]
-pub struct InitArgs {
-    pub name: Option<String>,
-    #[arg(long)] pub provider: Option<String>,
-    #[arg(long, value_delimiter = ',')] pub tags: Vec<String>,
-    #[arg(long, default_value = "private")] pub status: String,
-    #[arg(long, default_value = "main")]    pub branch: String,
-    #[arg(long)] pub batch: Option<String>,
-}
-
-
-#[derive(Args)]
-pub struct StatusArgs {
-    pub repo: Option<String>,
-    #[arg(long)] pub workspace: Option<String>,
-    #[arg(long)] pub filter:    Option<String>,
-}
-
-
-#[derive(Args)]
-pub struct SyncArgs {
-    #[command(subcommand)]
-    pub action: Option<SyncAction>,
-}
-
-#[derive(Subcommand)]
-pub enum SyncAction {
-    Pull {
-        #[arg(long)] all:       bool,
-        #[arg(long)] workspace: Option<String>,
-    },
-    Commit {
-        #[arg(short = 'm', long)] message: Option<String>,
-        #[arg(long)]              all:     bool,
-    },
-    Push {
-        #[arg(long)] all:             bool,
-        #[arg(long)] force_with_lease: bool,
-        /// If set, also stage+commit dirty repos with this message before pushing
-        #[arg(short = 'm', long)] message: Option<String>,
-    },
-    Branch(BranchArgs),
-    Pr(PrArgs),
-}
-
-#[derive(Args)]
-pub struct PrArgs {
-    #[command(subcommand)]
-    pub action: PrAction,
-}
-
-#[derive(Subcommand)]
-pub enum PrAction {
-    Create {
-        #[arg(long)] title:     Option<String>,
-        #[arg(long)] base:      Option<String>,
-        #[arg(long)] head:      Option<String>,
-        #[arg(long, value_delimiter = ',')] reviewers: Vec<String>,
-        #[arg(long, value_delimiter = ',')] labels:    Vec<String>,
-        #[arg(long)] repo:      Option<String>,
-    },
-}
-
-#[derive(Args)]
-pub struct BranchArgs {
-    #[command(subcommand)]
-    pub action: BranchAction,
-}
-
-#[derive(Subcommand)]
-pub enum BranchAction {
-    Create { name: String, #[arg(long, value_delimiter = ',')] repos: Vec<String> },
-    Delete { name: String },
-    Switch { name: String, #[arg(long)] all: bool },
-}
-
-
-#[derive(Args)]
-pub struct ReleaseArgs {
-    #[command(subcommand)]
-    pub action: Option<ReleaseAction>,
-}
-
-#[derive(Subcommand)]
-pub enum ReleaseAction {
-    Create {
-        version: Option<String>,
-        #[arg(long, default_value = "patch")] release_type: String,
-        #[arg(long)] generate_changelog: bool,
-    },
-    List,
-    Tag { version: String, #[arg(long, value_delimiter = ',')] repos: Vec<String> },
-}
-
-
-#[derive(Args)]
-pub struct RefactorArgs {
-    #[command(subcommand)]
-    pub action: Option<RefactorAction>,
-}
-
-#[derive(Subcommand)]
-pub enum RefactorAction {
-    Rename {
-        kind: String, from: String, to: String,
-        #[arg(long, value_delimiter = ',')] repos: Vec<String>,
-        #[arg(long)] dry_run: bool,
-    },
-    Clean    { target: String },
-    Find {
-        pattern: String,
-        #[arg(long)]          repos:     Option<String>,
-        #[arg(long = "type")] find_type: Option<String>,
-    },
-    Generate { target: String },
-}
-
-
-#[derive(Args)]
-pub struct StatsArgs {
-    #[command(subcommand)]
-    pub action: Option<StatsAction>,
-    #[arg(long)] pub repo:      Option<String>,
-    #[arg(long)] pub workspace: Option<String>,
-    /// Save output to <repo>/.fxg/stats.md
-    #[arg(long)] pub save: bool,
-}
-
-#[derive(Subcommand)]
-pub enum StatsAction {
-    Time {
-        #[arg(long)] repo:  Option<String>,
-        #[arg(long)] since: Option<String>,
-    },
-    Lines, Languages, Functions, Security,
-}
-
-#[derive(Args)]
-pub struct WorkspaceArgs {
-    #[command(subcommand)]
-    pub action: Option<WorkspaceAction>,
-}
-
-#[derive(Subcommand)]
-pub enum WorkspaceAction {
-    Create { name: String },
-    Add    { workspace: String, repos: Vec<String> },
-    Remove { name: String },
-    List,
-}
-
-#[derive(Args)]
-pub struct SummaryArgs {
-    /// Repository name (defaults to current directory)
-    pub repo: Option<String>,
-    #[arg(long)] pub workspace: Option<String>,
-    /// Print to stdout instead of saving to <repo>/.fxg/summary.md
-    #[arg(long)] pub print: bool,
-}
-
-#[derive(Args)]
-pub struct AdoptArgs {
-    /// Folder name inside workspace_root to adopt (omit for interactive TUI)
-    pub name: Option<String>,
-    /// Adopt all non-git folders without prompting
-    #[arg(long)] pub all: bool,
-    /// Provider to use (default: from config)
-    #[arg(long)] pub provider: Option<String>,
-    /// Visibility: private (default) or public
-    #[arg(long, default_value = "private")] pub visibility: String,
-    /// Initial commit message
-    #[arg(long, short = 'm', default_value = "chore: init")] pub message: String,
-}
-
-
-#[derive(Args)]
-pub struct ManageArgs {
-    #[command(subcommand)]
-    pub action: Option<ManageAction>,
-}
-
-#[derive(Subcommand)]
-pub enum ManageAction {
-    /// Delete remote (and optionally local) repository
-    Delete {
-        pub_repo: String,
-        /// Also delete local directory
-        #[arg(long)] local: bool,
-    },
-    /// Rename repository on remote (and locally if found)
-    Rename {
-        pub_repo: String,
-        new_name: String,
-    },
-    /// Change repository visibility (interactive picker)
-    Visibility {
-        /// Repository name (omit to pick from list)
-        pub_repo: Option<String>,
-    },
-    /// Set repository topics (interactive picker)
-    Topics {
-        /// Repository name (omit to pick from list)
-        pub_repo: Option<String>,
-        /// Topics to set (comma-separated; omit to enter interactively)
-        #[arg(long, value_delimiter = ',')] set: Vec<String>,
-    },
-    /// Archive repository (makes it read-only on remote)
-    Archive {
-        pub_repo: String,
-    },
-    /// Interactive wizard: assign local category folder + GitHub topics to all repos
-    Categorize,
-}
-
-
-#[derive(Args)]
-pub struct UtilArgs {
-    #[command(subcommand)]
-    pub action: Option<UtilAction>,
-}
-
-#[derive(Subcommand)]
-pub enum UtilAction {
-    /// Show unified chronological commit log across all repos
-    Log {
-        /// Max commits to show in total
-        #[arg(long, default_value = "30")] limit: usize,
-    },
-    /// Scan git history for common secret patterns
-    FindSecrets {
-        /// Repo names to scan (comma-separated; omit for all)
-        #[arg(value_delimiter = ',')] repos: Vec<String>,
-    },
-    /// Create a new document (CHANGELOG, README, TODO) in a repo
-    NewDoc {
-        /// Repository name (omit to pick from list)
-        pub_repo: Option<String>,
-        /// Document type (omit to pick interactively)
-        #[arg(long = "type")] doc_type: Option<String>,
-    },
 }

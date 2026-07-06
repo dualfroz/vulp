@@ -1,13 +1,17 @@
-pub mod ui;
+//! Onboards a local folder onto a remote git provider: either from scratch
+//! (`adopt_folder` — git init, stage, commit, create remote, push) or for a
+//! folder that already has commits (`publish_existing` — just create the
+//! remote and push). Called by the hub's "Create new repo" and "Link
+//! existing folder" flows.
 
 use crate::auth::load_accounts;
-use crate::cli::AdoptArgs;
 use crate::config::AppConfig;
 use crate::providers::{default_account, make_provider};
-use anyhow::Result;
 use git2::{IndexAddOption, Repository, Signature};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+/// Outcome of an adopt/publish operation, reported back to the TUI's
+/// progress modal.
 #[derive(Debug, Clone)]
 pub struct AdoptResult {
     pub name:    String,
@@ -25,49 +29,6 @@ impl AdoptResult {
     }
 }
 
-/// Scan for adoptable folders using the two-tier model:
-///
-/// Tier 1 — direct children of `root` that are NOT in `groups` and have no `.git`.
-/// Tier 2 — direct children of each `root/<group>` folder that have no `.git`.
-///
-/// Never recurses further. Hidden dirs and the group folders themselves are excluded.
-pub fn scan_non_git(root: &Path, groups: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let group_set: std::collections::HashSet<&str> = groups.iter().map(|s| s.as_str()).collect();
-
-    // Tier 1: direct children of workspace_root
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() { continue; }
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.starts_with('.') { continue; }
-            if group_set.contains(name.as_ref()) { continue; } // group container, not a project
-            if path.join(".git").exists() { continue; }
-            out.push(path);
-        }
-    }
-
-    // Tier 2: direct children of each group folder
-    for group in groups {
-        let group_dir = root.join(group);
-        if !group_dir.is_dir() { continue; }
-        if let Ok(entries) = std::fs::read_dir(&group_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() { continue; }
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                if name.starts_with('.') { continue; }
-                if path.join(".git").exists() { continue; }
-                out.push(path);
-            }
-        }
-    }
-
-    out.sort();
-    out
-}
-
 /// Core adopt operation for a single folder:
 /// git init → stage all → initial commit → create remote repo → add remote → push
 pub async fn adopt_folder(
@@ -76,16 +37,20 @@ pub async fn adopt_folder(
     private: bool,
     commit_msg: &str,
     provider_hint: Option<&str>,
+    owner: Option<&str>,
+    progress: impl Fn(&str),
 ) -> AdoptResult {
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
     // ── git init ─────────────────────────────────────────────────────────────
+    progress("git init");
     let repo = match Repository::init(path) {
         Ok(r)  => r,
         Err(e) => return AdoptResult::err(&name, format!("git init: {}", e)),
     };
 
     // ── stage everything ─────────────────────────────────────────────────────
+    progress("staging files");
     let mut index = match repo.index() {
         Ok(i)  => i,
         Err(e) => return AdoptResult::err(&name, format!("index: {}", e)),
@@ -98,6 +63,7 @@ pub async fn adopt_folder(
     }
 
     // ── initial commit ────────────────────────────────────────────────────────
+    progress("creating initial commit");
     let tree_id = match index.write_tree() {
         Ok(id) => id,
         Err(e) => return AdoptResult::err(&name, format!("write tree: {}", e)),
@@ -115,34 +81,51 @@ pub async fn adopt_folder(
     }
 
     // ── create remote repo via API ────────────────────────────────────────────
+    progress("resolving provider account");
     let accounts = load_accounts(cfg).unwrap_or_default();
     let acc = match default_account(&accounts, provider_hint.or(Some(&cfg.default_provider))) {
         Some(a) => a,
-        None    => return AdoptResult::err(&name, "no provider account configured — run: fxg auth add"),
+        None    => return AdoptResult::err(&name, "no provider account configured — run: vulp auth add"),
     };
     let provider = match make_provider(acc) {
         Ok(p)  => p,
         Err(e) => return AdoptResult::err(&name, format!("provider: {}", e)),
     };
-    let repo_info = match provider.create_repo(&name, private, "").await {
+    progress(&format!("creating repo on {} via API", acc.provider));
+    let repo_info = match provider.create_repo(&name, private, "", owner).await {
         Ok(r)  => r,
         Err(e) => return AdoptResult::err(&name, format!("create remote repo: {}", e)),
     };
 
     // ── git remote add origin ─────────────────────────────────────────────────
-    // Prefer SSH URL; fall back to HTTPS clone URL
-    let remote_url = if !repo_info.ssh_url.is_empty() {
-        repo_info.ssh_url.clone()
-    } else {
+    // Prefer HTTPS: push auth below uses the stored token, which works over HTTPS
+    // without needing the remote's SSH host key to already be trusted locally.
+    let remote_url = if !repo_info.url.is_empty() {
         repo_info.url.clone()
+    } else {
+        repo_info.ssh_url.clone()
     };
 
+    progress(&format!("git remote add origin {}", remote_url));
     if let Err(e) = repo.remote("origin", &remote_url) {
         return AdoptResult::err(&name, format!("remote add: {}", e));
     }
 
     // ── push ──────────────────────────────────────────────────────────────────
-    let token = crate::auth::get_token(&acc.id()).unwrap_or_default();
+    progress("pushing to origin");
+    let token  = crate::auth::get_token(&acc.id()).unwrap_or_default();
+    let branch = match push_branch(&repo, cfg, token) {
+        Ok(b)  => b,
+        Err(e) => return AdoptResult::err(&name, format!("push: {}", e)),
+    };
+
+    AdoptResult::ok(&name, format!("pushed {}", branch), repo_info.url)
+}
+
+/// Pushes the current HEAD branch to `origin`, returning the branch name.
+/// Shared by `adopt_folder` (brand-new repo) and `publish_existing` (folder
+/// that already has commits, just needs a remote).
+fn push_branch(repo: &Repository, cfg: &AppConfig, token: String) -> std::result::Result<String, git2::Error> {
     let mut cb = git2::RemoteCallbacks::new();
     cb.credentials(move |_url, user, allowed| {
         if allowed.contains(git2::CredentialType::SSH_KEY) {
@@ -154,70 +137,71 @@ pub async fn adopt_folder(
     let mut push_opts = git2::PushOptions::new();
     push_opts.remote_callbacks(cb);
 
-    let mut remote = match repo.find_remote("origin") {
-        Ok(r)  => r,
-        Err(e) => return AdoptResult::err(&name, format!("find remote: {}", e)),
-    };
-
+    let mut remote = repo.find_remote("origin")?;
     let branch = repo.head()
         .ok()
         .and_then(|h| h.shorthand().map(|s| s.to_string()))
         .unwrap_or_else(|| cfg.default_branch.clone());
 
     let refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
-    if let Err(e) = remote.push(&[&refspec], Some(&mut push_opts)) {
-        return AdoptResult::err(&name, format!("push: {}", e));
-    }
-
-    AdoptResult::ok(&name, format!("pushed {}", branch), repo_info.url)
+    remote.push(&[&refspec], Some(&mut push_opts))?;
+    Ok(branch)
 }
 
-// ── entry point ───────────────────────────────────────────────────────────────
+/// For a folder that already has git commits but isn't on a remote yet:
+/// create the remote repo (if `origin` doesn't already exist) and push,
+/// without touching any existing history.
+pub async fn publish_existing(
+    path: &Path,
+    cfg: &AppConfig,
+    private: bool,
+    provider_hint: Option<&str>,
+    owner: Option<&str>,
+    progress: impl Fn(&str),
+) -> AdoptResult {
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-pub async fn run(args: AdoptArgs, cfg: &AppConfig) -> Result<()> {
-    let private = args.visibility != "public";
-    let provider_hint = args.provider.as_deref();
+    progress("opening existing repo");
+    let repo = match Repository::open(path) {
+        Ok(r)  => r,
+        Err(e) => return AdoptResult::err(&name, format!("open repo: {}", e)),
+    };
 
-    // Single named folder
-    if let Some(name) = &args.name {
-        let path = cfg.workspace_root.join(name);
-        if !path.is_dir() {
-            anyhow::bail!("folder '{}' not found in workspace_root", name);
+    progress("resolving provider account");
+    let accounts = load_accounts(cfg).unwrap_or_default();
+    let acc = match default_account(&accounts, provider_hint.or(Some(&cfg.default_provider))) {
+        Some(a) => a,
+        None    => return AdoptResult::err(&name, "no provider account configured — run: vulp auth add"),
+    };
+
+    let remote_url = match repo.find_remote("origin") {
+        Ok(r) => r.url().unwrap_or_default().to_string(),
+        Err(_) => {
+            let provider = match make_provider(acc) {
+                Ok(p)  => p,
+                Err(e) => return AdoptResult::err(&name, format!("provider: {}", e)),
+            };
+            progress(&format!("creating repo on {} via API", acc.provider));
+            let repo_info = match provider.create_repo(&name, private, "", owner).await {
+                Ok(r)  => r,
+                Err(e) => return AdoptResult::err(&name, format!("create remote repo: {}", e)),
+            };
+            let url = if !repo_info.url.is_empty() { repo_info.url.clone() } else { repo_info.ssh_url.clone() };
+            progress(&format!("git remote add origin {}", url));
+            if let Err(e) = repo.remote("origin", &url) {
+                return AdoptResult::err(&name, format!("remote add: {}", e));
+            }
+            url
         }
-        if path.join(".git").exists() {
-            anyhow::bail!("'{}' already has a git repo", name);
-        }
-        let result = adopt_folder(&path, cfg, private, &args.message, provider_hint).await;
-        print_result(&result);
-        return Ok(());
-    }
+    };
 
-    let candidates = scan_non_git(&cfg.workspace_root, &cfg.workspace_groups);
-    if candidates.is_empty() {
-        println!("Wszystkie foldery w workspace_root już mają .git. Nic do adoptowania.");
-        return Ok(());
-    }
+    progress("pushing to origin");
+    let token  = crate::auth::get_token(&acc.id()).unwrap_or_default();
+    let branch = match push_branch(&repo, cfg, token) {
+        Ok(b)  => b,
+        Err(e) => return AdoptResult::err(&name, format!("push: {}", e)),
+    };
 
-    if args.all {
-        // Batch — no TUI
-        println!("Adoptuję {} folderów...\n", candidates.len());
-        for path in &candidates {
-            let result = adopt_folder(path, cfg, private, &args.message, provider_hint).await;
-            print_result(&result);
-        }
-    } else {
-        // Interactive TUI
-        ui::run_adopt_tui(candidates, &cfg.workspace_root, cfg, private, &args.message, provider_hint).await?;
-    }
-
-    Ok(())
+    AdoptResult::ok(&name, format!("pushed {}", branch), remote_url)
 }
 
-fn print_result(r: &AdoptResult) {
-    if r.success {
-        let url = r.url.as_deref().unwrap_or("");
-        println!("  ✓ {}  →  {}", r.name, url);
-    } else {
-        println!("  ✗ {}  —  {}", r.name, r.detail);
-    }
-}

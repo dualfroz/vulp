@@ -1,8 +1,11 @@
+//! Workspace scanning and per-repo summary computation: walks the workspace
+//! root for git repos, computes each one's branch/ahead-behind/dirty/license/
+//! language state, and streams results to the hub as they're found rather
+//! than waiting for the whole workspace to finish scanning.
+
 pub mod detail;
 
-use crate::cli::StatusArgs;
 use crate::config::AppConfig;
-use crate::workspace::load_workspaces;
 use anyhow::Result;
 use chrono::Utc;
 use git2::{Repository, StatusOptions};
@@ -10,7 +13,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-#[derive(Debug, Clone)]
+/// Everything the hub's Repos table and topbar need for one repo, computed
+/// once per scan.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RepoSummary {
     pub name:            String,
     pub path:            PathBuf,
@@ -24,14 +29,21 @@ pub struct RepoSummary {
     pub last_tag:        Option<String>,
     pub visibility:      Option<String>,
     pub owner:           Option<String>,  // parsed from git remote URL
-    pub license:         bool,
+    pub has_license:     bool,
     pub lang:            Option<String>,
     pub bookmarked:      bool,
     pub stars:           Option<u32>,
     pub open_issues:     Option<u32>,
     pub open_prs:        Option<u32>,
+    /// Stash entries, counted from `.git/logs/refs/stash` (cheap file read,
+    /// no subprocess — scan-path safe).
+    pub stash_count:     usize,
 }
 
+/// One commit's display fields for a recent-commits list.
+/// Fields currently populated but unread — kept as the seed-data model for
+/// the detail view (see roadmap: per-commit actions).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CommitLine {
     pub sha:    String,
@@ -40,6 +52,9 @@ pub struct CommitLine {
     pub author: String,
 }
 
+/// Richer per-repo detail beyond `RepoSummary`, used as the seed data for
+/// opening the repo detail view.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RepoDetail {
     pub summary:        RepoSummary,
@@ -52,6 +67,7 @@ pub struct RepoDetail {
 
 // ── owner parsing ─────────────────────────────────────────────────────────────
 
+/// Extracts the `owner` segment from an HTTPS or SSH git remote URL.
 fn parse_owner_from_url(url: &str) -> Option<String> {
     // https://github.com/owner/repo[.git]
     if url.starts_with("http") {
@@ -69,6 +85,7 @@ fn parse_owner_from_url(url: &str) -> Option<String> {
     None
 }
 
+/// Parses the owner from `repo`'s `origin` remote, if it has one.
 fn extract_owner(repo: &Repository) -> Option<String> {
     let remote = repo.find_remote("origin").ok()?;
     parse_owner_from_url(remote.url()?)
@@ -76,6 +93,7 @@ fn extract_owner(repo: &Repository) -> Option<String> {
 
 // ── license + language detection ──────────────────────────────────────────────
 
+/// Whether `path` has a recognizable license file at its root.
 pub fn detect_license(path: &Path) -> bool {
     ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "COPYING.md"]
         .iter().any(|f| path.join(f).exists())
@@ -87,6 +105,12 @@ const ASSET_CATEGORIES: &[&str] = &[
     "PDF", "Docs", "Spreadsheets", "Slides", "eBook",
 ];
 
+/// Detects the repo's dominant language(s) by file-extension counts,
+/// returning up to 4 as a "`Lang NN%`" display string. Asset extensions
+/// (images, audio, fonts, etc.) are excluded from the percentage base unless
+/// they make up over 80% of the repo, in which case they're shown instead —
+/// otherwise a repo that's mostly a code project with some bundled assets
+/// would have its real language diluted by file count alone.
 pub fn detect_language(path: &Path) -> Option<String> {
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     let mut total = 0usize;
@@ -116,6 +140,7 @@ pub fn detect_language(path: &Path) -> Option<String> {
         .join("  "))
 }
 
+/// Maps a file extension to a display language/category name.
 fn ext_to_lang(ext: &str) -> Option<&'static str> {
     Some(match ext {
         // ── code ──────────────────────────────────────────────────────────────
@@ -197,6 +222,10 @@ fn ext_to_lang(ext: &str) -> Option<&'static str> {
     })
 }
 
+/// Recursively tallies file extensions under `dir` into `counts`, stopping
+/// at `depth` or once `total` hits 5000 files — a repo-wide walk only needs
+/// a representative sample, not an exhaustive count, and the cap keeps huge
+/// repos from making every scan slow.
 fn lang_walk(
     dir: &Path,
     counts: &mut HashMap<&'static str, usize>,
@@ -222,11 +251,15 @@ fn lang_walk(
 
 // ── lazy per-repo extras ───────────────────────────────────────────────────────
 
+/// Number of files tracked in the git index — cheaper than walking the
+/// filesystem since it's served straight from git's own index.
 pub fn count_tracked_files(path: &Path) -> usize {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return 0 };
     repo.index().map(|i| i.len()).unwrap_or(0)
 }
 
+/// The `n` most recent commits as `(age, message)` pairs, for the Overview
+/// tab's recent-activity list.
 pub fn repo_recent_commits(path: &Path, n: usize) -> Vec<(String, String)> {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return vec![] };
     let mut revwalk = match repo.revwalk() { Ok(r) => r, Err(_) => return vec![] };
@@ -244,8 +277,12 @@ pub fn repo_recent_commits(path: &Path, n: usize) -> Vec<(String, String)> {
 
 // ── git helpers ───────────────────────────────────────────────────────────────
 
+/// Public entry point for `format_age`, for callers outside this module
+/// (detail/project-detail rendering) that need the same "Nm/h/d ago"
+/// formatting without duplicating it.
 pub fn format_age_pub(secs: i64) -> String { format_age(secs) }
 
+/// Formats a Unix timestamp as a short relative-age string.
 fn format_age(secs: i64) -> String {
     let diff = Utc::now().timestamp() - secs;
     match diff {
@@ -256,6 +293,8 @@ fn format_age(secs: i64) -> String {
     }
 }
 
+/// Commits ahead/behind the matching `origin/<branch>`, or `(0, 0)` if
+/// there's no such upstream (a purely local branch, or detached HEAD).
 fn ahead_behind(repo: &Repository, branch: &str) -> (usize, usize) {
     let local = match repo.head().and_then(|h| h.peel_to_commit()) {
         Ok(c)  => c.id(),
@@ -268,6 +307,9 @@ fn ahead_behind(repo: &Repository, branch: &str) -> (usize, usize) {
     }
 }
 
+/// The name of the most recently created annotated or lightweight tag,
+/// determined by the tagged commit's timestamp rather than tag creation
+/// order (which git doesn't expose directly).
 fn latest_tag(repo: &Repository) -> Option<String> {
     let mut best: Option<(i64, String)> = None;
     if let Ok(names) = repo.tag_names(None) {
@@ -277,7 +319,7 @@ fn latest_tag(repo: &Repository) -> Option<String> {
                 .and_then(|obj| obj.peel_to_commit().ok())
                 .map(|c| c.time().seconds());
             if let Some(ts) = ts {
-                if best.as_ref().map_or(true, |(t, _)| ts > *t) {
+                if best.as_ref().is_none_or(|(t, _)| ts > *t) {
                     best = Some((ts, name.to_string()));
                 }
             }
@@ -286,24 +328,42 @@ fn latest_tag(repo: &Repository) -> Option<String> {
     best.map(|(_, n)| n)
 }
 
+/// Computes a full `RepoSummary` for the repo at `path`. Treats a freshly
+/// `git init`'d repo with zero commits as a valid (empty) result rather than
+/// an error, so brand-new repos still show up in the hub instead of being
+/// silently dropped from scan results.
 pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     let t_total = std::time::Instant::now();
 
-    let repo   = Repository::open(path)?;
-    let head   = repo.head()?;
-    let branch = head.shorthand().unwrap_or("HEAD").to_string();
+    let repo = Repository::open(path)?;
 
-    let commit = head.peel_to_commit()?;
-    let msg    = commit.summary().unwrap_or("").chars().take(60).collect::<String>();
-    let age    = format_age(commit.time().seconds());
-    let ts     = commit.time().seconds();
+    // A freshly `git init`'d repo has no commits yet, so `repo.head()` returns
+    // an UnbornBranch error. Treat that as a valid (empty) repo instead of
+    // silently dropping it from the scan results.
+    let (branch, msg, age, ts) = match repo.head() {
+        Ok(head) => {
+            let branch = head.shorthand().unwrap_or("HEAD").to_string();
+            let commit = head.peel_to_commit()?;
+            let msg    = commit.summary().unwrap_or("").chars().take(160).collect::<String>();
+            let age    = format_age(commit.time().seconds());
+            let ts     = commit.time().seconds();
+            (branch, msg, age, ts)
+        }
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+            let branch = std::fs::read_to_string(path.join(".git/HEAD")).ok()
+                .and_then(|s| s.trim().strip_prefix("ref: refs/heads/").map(str::to_string))
+                .unwrap_or_else(|| "HEAD".to_string());
+            (branch, "(no commits yet)".to_string(), "—".to_string(), 0)
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let t_tag = std::time::Instant::now();
     let last_tag = latest_tag(&repo);
     let tag_ms   = t_tag.elapsed().as_millis();
 
     let owner   = extract_owner(&repo);
-    let license = detect_license(path);
+    let has_license = detect_license(path);
 
     let t_lang = std::time::Instant::now();
     let lang   = detect_language(path);
@@ -323,14 +383,21 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
         t_total.elapsed().as_millis()
     ));
 
+    let stash_count = std::fs::read_to_string(path.join(".git/logs/refs/stash"))
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+
     Ok(RepoSummary {
         name, path: path.to_path_buf(), branch, ahead, behind, is_dirty,
         last_commit_msg: msg, last_commit_age: age, last_commit_ts: ts,
-        last_tag, visibility: None, owner, license, lang, bookmarked: false,
+        last_tag, visibility: None, owner, has_license, lang, bookmarked: false,
         stars: None, open_issues: None, open_prs: None,
+        stash_count,
     })
 }
 
+/// Computes a `RepoDetail` (summary plus modified-files and recent-commits
+/// snapshots) for the repo at `path`.
 pub fn repo_detail(path: &Path) -> Result<RepoDetail> {
     let repo = Repository::open(path)?;
     let summary = repo_summary(path)?;
@@ -374,6 +441,9 @@ pub fn scan_workspace_stream(root: PathBuf) -> mpsc::Receiver<RepoSummary> {
     rx
 }
 
+/// Recursive worker for `scan_workspace_stream`: walks `dir`, sending each
+/// found repo's summary to `tx` immediately rather than collecting into a
+/// `Vec` first, so the hub can start showing results before the scan finishes.
 fn scan_recursive_tx(
     dir: &Path, root: &Path,
     tx: &mpsc::Sender<RepoSummary>,
@@ -404,6 +474,10 @@ fn scan_recursive_tx(
     }
 }
 
+/// Synchronous (non-streaming) full workspace scan, sorted with
+/// dirty/behind repos first and otherwise by most-recently-committed.
+/// `_groups` is currently unused — see `config::AppConfig::workspace_groups`'s
+/// doc comment for the intended (not yet wired up) grouping behavior.
 pub fn scan_workspace(root: &Path, _groups: &[String]) -> Result<Vec<RepoSummary>> {
     crate::debug::log(format!("scan_workspace: {}", root.display()));
     let mut repos = Vec::new();
@@ -433,6 +507,7 @@ const SKIP_DIRS: &[&str] = &[
     ".npm", ".cargo", "__pycache__", ".venv", "venv", "dist", "build",
 ];
 
+/// Recursive worker for `scan_workspace`, collecting results into `repos`.
 fn scan_recursive(dir: &Path, root: &Path, repos: &mut Vec<RepoSummary>, depth: u8) {
     if depth == 0 { return; }
     let entries = match std::fs::read_dir(dir) {
@@ -459,36 +534,9 @@ fn scan_recursive(dir: &Path, root: &Path, repos: &mut Vec<RepoSummary>, depth: 
     }
 }
 
-pub fn apply_filter(mut repos: Vec<RepoSummary>, filter: &str) -> Vec<RepoSummary> {
-    repos.retain(|r| match filter {
-        "dirty"  => r.is_dirty,
-        "behind" => r.behind > 0,
-        "ahead"  => r.ahead > 0,
-        "clean"  => !r.is_dirty && r.behind == 0,
-        _        => true,
-    });
-    repos
-}
-
-pub async fn run(args: StatusArgs, cfg: &AppConfig) -> Result<()> {
-    if let Some(repo_name) = &args.repo {
-        let path = cfg.workspace_root.join(repo_name);
-        let detail = repo_detail(&path)?;
-        return crate::hub::run_detail_tui(detail);
-    }
-
-    if let Some(ws_name) = &args.workspace {
-        let wss = load_workspaces(cfg)?;
-        let ws  = wss.iter().find(|w| &w.name == ws_name)
-            .ok_or_else(|| anyhow::anyhow!("workspace '{}' not found", ws_name))?;
-        let mut repos = Vec::new();
-        for path in crate::workspace::resolve_paths(ws, cfg) {
-            if let Ok(s) = repo_summary(&path) { repos.push(s); }
-        }
-        if let Some(f) = &args.filter { repos = apply_filter(repos, f); }
-        return crate::hub::run_overview_tui(repos, None, cfg).await;
-    }
-
+/// Entry point for the bare `vulp` command (no subcommand): starts a
+/// streaming workspace scan and opens the hub TUI against it.
+pub async fn run(cfg: &AppConfig) -> Result<()> {
     let rx = scan_workspace_stream(cfg.workspace_root.clone());
     crate::hub::run_overview_tui(vec![], Some(rx), cfg).await
 }

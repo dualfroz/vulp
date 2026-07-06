@@ -1,7 +1,12 @@
+//! User-defined project groupings (`~/.vulp/projects.toml`): named, colored
+//! collections of repos (by workspace-relative path) that the hub's
+//! Projects tab lets you create, assign repos to, and filter by.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// One project: a name, a display color, and the set of repos assigned to it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name:  String,
@@ -17,9 +22,11 @@ struct ProjectsFile {
 }
 
 fn file_path() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".fxg").join("projects.toml")
+    dirs::home_dir().unwrap_or_default().join(".vulp").join("projects.toml")
 }
 
+/// Loads every project from disk, or an empty list if the file doesn't
+/// exist or fails to parse.
 pub fn load() -> Vec<Project> {
     let p = file_path();
     if !p.exists() { return Vec::new(); }
@@ -28,6 +35,7 @@ pub fn load() -> Vec<Project> {
         .unwrap_or_default()
 }
 
+/// Overwrites the projects file with `projects`.
 pub fn save(projects: &[Project]) -> anyhow::Result<()> {
     let p = file_path();
     if let Some(parent) = p.parent() { std::fs::create_dir_all(parent)?; }

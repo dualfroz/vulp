@@ -1,3 +1,7 @@
+//! Standalone TUI for `vulp config`: a flat editable field list, switching
+//! out to `inquire::Select` (outside ratatui's raw mode) for fields that
+//! must be chosen from a fixed list rather than typed freely.
+
 use crate::config::AppConfig;
 use crate::tui;
 use anyhow::Result;
@@ -19,12 +23,16 @@ const ENUM_FIELDS: &[(&str, &[&str])] = &[
     ("gitignore_template", &["node", "rust", "python", "blank"]),
 ];
 
+/// Looks up the fixed option list for `key`, if it's an enum field.
 fn enum_options(key: &str) -> Option<&'static [&'static str]> {
     ENUM_FIELDS.iter().find(|(k, _)| *k == key).map(|(_, opts)| *opts)
 }
 
 // ── TUI state ─────────────────────────────────────────────────────────────────
 
+/// Signal from the ratatui inner loop to the outer loop in `run_config_tui`:
+/// either stop entirely, or briefly leave raw mode to show an `inquire`
+/// picker for one enum field.
 enum Action {
     Quit,
     OpenPicker { field_idx: usize, options: Vec<&'static str> },
@@ -49,6 +57,9 @@ impl State {
         }
     }
 
+    /// Applies every edited field back onto `base`, returning the updated
+    /// config. Starts from the original `AppConfig` (rather than building
+    /// one from scratch) so any field not exposed in `fields()` is preserved.
     fn to_config(&self, base: AppConfig) -> AppConfig {
         let mut cfg = base;
         let labels: Vec<&str> = self.fields.iter().map(|(k, _)| *k).collect();
@@ -61,10 +72,12 @@ impl State {
 
 // ── render ────────────────────────────────────────────────────────────────────
 
+/// Draws the field list, with enum fields tagged `[pick]` and the
+/// currently-edited field (if any) showing its live edit buffer.
 fn render(f: &mut Frame, state: &State) {
     let area = f.area();
     let outer = Block::default()
-        .title(" fxg — Configuration ")
+        .title(" vulp — Configuration ")
         .borders(Borders::ALL);
     let inner = outer.inner(area);
     f.render_widget(outer, area);
@@ -126,6 +139,8 @@ fn render(f: &mut Frame, state: &State) {
 
 // ── key handling ──────────────────────────────────────────────────────────────
 
+/// Routes one key event to either free-text edit-buffer editing or
+/// navigation/action handling, depending on `state.editing`.
 fn handle_key(state: &mut State, key: KeyEvent) {
     if state.editing {
         match key.code {
@@ -178,6 +193,9 @@ fn handle_key(state: &mut State, key: KeyEvent) {
 
 // ── ratatui inner loop ────────────────────────────────────────────────────────
 
+/// Runs the ratatui draw/poll/input loop until `handle_key` sets an
+/// `Action`, then returns it (defaulting to `Quit` if the loop somehow
+/// exits without one).
 fn run_ratatui_loop(state: &mut State) -> Result<Action> {
     tui::run_loop(|terminal| {
         terminal.draw(|f| render(f, state))?;
@@ -191,6 +209,10 @@ fn run_ratatui_loop(state: &mut State) -> Result<Action> {
 
 // ── public entry point ────────────────────────────────────────────────────────
 
+/// Runs the settings TUI until the user quits, alternating between the
+/// ratatui field list and (for enum fields) an `inquire` picker shown after
+/// briefly leaving raw mode. Returns the fully updated config for the
+/// caller to persist.
 pub fn run_config_tui(cfg: AppConfig) -> Result<AppConfig> {
     let mut state = State::new(&cfg);
 
@@ -203,13 +225,13 @@ pub fn run_config_tui(cfg: AppConfig) -> Result<AppConfig> {
                 let current = &state.fields[field_idx].1;
                 let start = options.iter().position(|o| *o == current.as_str()).unwrap_or(0);
                 let key_name = state.fields[field_idx].0;
-                match Select::new(&format!("{}:", key_name), options)
+                // Esc (None) keeps the old value.
+                if let Some(chosen) = Select::new(&format!("{}:", key_name), options)
                     .with_starting_cursor(start)
                     .with_help_message("Use ↑/↓ to select, Enter to confirm, Esc to cancel")
                     .prompt_skippable()?
                 {
-                    Some(chosen) => { state.fields[field_idx].1 = chosen.to_string(); }
-                    None         => {} // Esc — keep old value
+                    state.fields[field_idx].1 = chosen.to_string();
                 }
                 // Loop continues — re-enter ratatui
             }

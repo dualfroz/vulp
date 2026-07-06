@@ -1,3 +1,6 @@
+//! `Provider` implementation for Gitea and Forgejo (API-compatible forks),
+//! talking to the REST API v1 directly over `reqwest`.
+
 use super::{PrInfo, Provider, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -12,13 +15,17 @@ pub struct GiteaProvider {
 }
 
 impl GiteaProvider {
+    /// Builds a client authenticated with `token`, scoped to `owner`'s repos
+    /// by default. Unlike GitHub/GitLab, Gitea has no fixed default
+    /// `base_url` — every instance is self-hosted, so the caller always
+    /// supplies one.
     pub fn new(base_url: &str, owner: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             header::AUTHORIZATION,
             header::HeaderValue::from_str(&format!("token {}", token))?,
         );
-        headers.insert(header::USER_AGENT, header::HeaderValue::from_static("fxg/0.1"));
+        headers.insert(header::USER_AGENT, header::HeaderValue::from_static("vulp/0.1"));
         let client = Client::builder().default_headers(headers).build()?;
         Ok(Self {
             client,
@@ -27,10 +34,20 @@ impl GiteaProvider {
         })
     }
 
+    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
+    /// Repo path segment: names may arrive as bare ("vulp" → account owner)
+    /// or fully qualified ("VulCodeCom/vulp" → used verbatim), so org-owned
+    /// repos work with a personal account's token.
+    fn slug(&self, repo: &str) -> String {
+        if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.owner, repo) }
+    }
+
+    /// Parses a response as JSON if the status was successful, otherwise
+    /// turns the non-2xx status and body into an error.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text   = resp.text().await?;
@@ -44,7 +61,7 @@ impl GiteaProvider {
 
 #[async_trait]
 impl Provider for GiteaProvider {
-    async fn create_repo(&self, name: &str, private: bool, description: &str) -> Result<RepoInfo> {
+    async fn create_repo(&self, name: &str, private: bool, description: &str, _owner: Option<&str>) -> Result<RepoInfo> {
         let body = json!({ "name": name, "private": private, "description": description, "auto_init": false });
         let resp = self.client.post(self.url("user/repos")).json(&body).send().await?;
         let v    = Self::check(resp).await.context("create_repo")?;
@@ -57,7 +74,7 @@ impl Provider for GiteaProvider {
 
     async fn delete_repo(&self, name: &str) -> Result<()> {
         let resp = self.client
-            .delete(self.url(&format!("repos/{}/{}", self.owner, name)))
+            .delete(self.url(&format!("repos/{}", self.slug(name))))
             .send().await?;
         Self::check(resp).await.context("delete_repo")?;
         Ok(())
@@ -66,7 +83,7 @@ impl Provider for GiteaProvider {
     async fn set_topics(&self, repo: &str, topics: &[String]) -> Result<()> {
         let body = json!({ "topics": topics });
         let resp = self.client
-            .put(self.url(&format!("repos/{}/{}/topics", self.owner, repo)))
+            .put(self.url(&format!("repos/{}/topics", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("set_topics")?;
         Ok(())
@@ -75,7 +92,7 @@ impl Provider for GiteaProvider {
     async fn create_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()> {
         let body = json!({ "new_branch_name": branch, "old_branch_name": from });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/branches", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/branches", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("create_branch")?;
         Ok(())
@@ -86,7 +103,7 @@ impl Provider for GiteaProvider {
     ) -> Result<PrInfo> {
         let payload = json!({ "title": title, "body": body, "head": head, "base": base });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/pulls", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/pulls", self.slug(repo))))
             .json(&payload).send().await?;
         let v = Self::check(resp).await.context("create_pull_request")?;
         Ok(PrInfo {
@@ -100,7 +117,7 @@ impl Provider for GiteaProvider {
     ) -> Result<()> {
         let body = json!({ "reviewers": reviewers });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/pulls/{}/requested_reviewers", self.owner, repo, pr_number)))
+            .post(self.url(&format!("repos/{}/pulls/{}/requested_reviewers", self.slug(repo), pr_number)))
             .json(&body).send().await?;
         Self::check(resp).await.context("request_reviewers")?;
         Ok(())
@@ -111,7 +128,7 @@ impl Provider for GiteaProvider {
     ) -> Result<()> {
         // Fetch existing labels to find IDs; create any that are missing
         let list_resp = self.client
-            .get(self.url(&format!("repos/{}/{}/labels", self.owner, repo)))
+            .get(self.url(&format!("repos/{}/labels", self.slug(repo))))
             .send().await?;
         let existing: Vec<(u64, String)> = if list_resp.status().is_success() {
             list_resp.json::<serde_json::Value>().await
@@ -132,7 +149,7 @@ impl Provider for GiteaProvider {
             } else {
                 let body = json!({ "name": label, "color": "#0075ca" });
                 let resp = self.client
-                    .post(self.url(&format!("repos/{}/{}/labels", self.owner, repo)))
+                    .post(self.url(&format!("repos/{}/labels", self.slug(repo))))
                     .json(&body).send().await?;
                 if let Ok(v) = Self::check(resp).await {
                     if let Some(id) = v["id"].as_u64() { ids.push(id); }
@@ -143,7 +160,7 @@ impl Provider for GiteaProvider {
         if !ids.is_empty() {
             let body = json!({ "labels": ids });
             let resp = self.client
-                .post(self.url(&format!("repos/{}/{}/issues/{}/labels", self.owner, repo, issue_number)))
+                .post(self.url(&format!("repos/{}/issues/{}/labels", self.slug(repo), issue_number)))
                 .json(&body).send().await?;
             Self::check(resp).await.context("add_labels")?;
         }
@@ -154,7 +171,7 @@ impl Provider for GiteaProvider {
         let permission = match role { "read" => "read", "admin" => "admin", _ => "write" };
         let body = json!({ "permission": permission });
         let resp = self.client
-            .put(self.url(&format!("repos/{}/{}/collaborators/{}", self.owner, repo, user)))
+            .put(self.url(&format!("repos/{}/collaborators/{}", self.slug(repo), user)))
             .json(&body).send().await?;
         Self::check(resp).await.context("add_collaborator")?;
         Ok(())
@@ -165,7 +182,7 @@ impl Provider for GiteaProvider {
     ) -> Result<String> {
         let payload = json!({ "tag_name": tag, "name": title, "body": body, "draft": draft });
         let resp = self.client
-            .post(self.url(&format!("repos/{}/{}/releases", self.owner, repo)))
+            .post(self.url(&format!("repos/{}/releases", self.slug(repo))))
             .json(&payload).send().await?;
         let v = Self::check(resp).await.context("create_release")?;
         Ok(v["html_url"].as_str().unwrap_or("").to_string())
@@ -173,7 +190,7 @@ impl Provider for GiteaProvider {
 
     async fn repo_meta(&self, repo: &str) -> Result<RepoMeta> {
         let resp = self.client
-            .get(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .get(self.url(&format!("repos/{}", self.slug(repo))))
             .send().await?;
         let v = Self::check(resp).await.context("repo_meta")?;
         Ok(RepoMeta {
@@ -194,7 +211,7 @@ impl Provider for GiteaProvider {
     async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
         let body = json!({ "private": private });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("update_visibility")?;
         Ok(())
@@ -203,7 +220,7 @@ impl Provider for GiteaProvider {
     async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
         let body = json!({ "name": new_name });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("rename_repo")?;
         Ok(())
@@ -212,7 +229,7 @@ impl Provider for GiteaProvider {
     async fn archive_repo(&self, repo: &str) -> Result<()> {
         let body = json!({ "archived": true });
         let resp = self.client
-            .patch(self.url(&format!("repos/{}/{}", self.owner, repo)))
+            .patch(self.url(&format!("repos/{}", self.slug(repo))))
             .json(&body).send().await?;
         Self::check(resp).await.context("archive_repo")?;
         Ok(())

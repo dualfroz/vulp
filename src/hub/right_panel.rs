@@ -1,3 +1,8 @@
+//! The right-hand info panel shown beside the main list on every hub tab:
+//! per-row detail for the selected repo/project/todo/PR/issue plus a
+//! contextual "Actions" block underneath, or the sync/release confirmation
+//! overlay while an action is pending.
+
 use crate::status::format_age_pub;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,30 +16,40 @@ use super::tabs::age_color;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/// A `"key: value"` row with the key dimmed and column-aligned, and the
+/// value colored by `val_col`.
 pub fn r_kv<'a>(key: &'a str, val: &str, val_col: Color) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!(" {:<11}", key), Style::default().fg(Color::DarkGray)),
         Span::styled(val.to_string(), Style::default().fg(val_col)),
     ])
 }
+/// Alias for [`r_kv`] used where the caller wants to make explicit that
+/// `val_col` is being chosen dynamically rather than a fixed constant.
 pub fn r_kv_color<'a>(key: &'a str, val: &str, val_col: Color) -> Line<'a> {
     r_kv(key, val, val_col)
 }
+/// A bold yellow section heading line (e.g. "Health", "Diff preview").
 pub fn r_section(title: &str) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {}", title),
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     ))
 }
+/// A horizontal rule sized to `width`, used right under a panel's title row.
 pub fn r_sep(width: u16) -> Line<'static> {
     Line::from(Span::styled(
         " ".to_string() + &"─".repeat(width.saturating_sub(2) as usize),
         Style::default().fg(Color::DarkGray),
     ))
 }
+/// A dimmed informational/placeholder line (e.g. "← select a repository").
 pub fn r_dim(s: String) -> Line<'static> {
     Line::from(Span::styled(s, Style::default().fg(Color::DarkGray)))
 }
+/// One row of the "Actions" block: a bracketed single-key hint followed by
+/// its description. `key == '\n'` renders `desc` alone as a plain styled
+/// line instead, used for the visual separators between action groups.
 pub fn r_action_line<'a>(key: char, desc: &'a str, col: Color) -> Line<'a> {
     if key == '\n' {
         return Line::from(Span::styled(desc, Style::default().fg(col)));
@@ -44,6 +59,8 @@ pub fn r_action_line<'a>(key: char, desc: &'a str, col: Color) -> Line<'a> {
         Span::styled(format!(" {}", desc), Style::default().fg(Color::White)),
     ])
 }
+/// Like [`r_action_line`], but for actions whose key hint is a multi-char
+/// label (e.g. `"↵"`, `"Space"`, `"^A"`) rather than a single `char`.
 pub fn r_action_key<'a>(key: &'a str, desc: &'a str, col: Color) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!(" [{}]", key), Style::default().fg(col).add_modifier(Modifier::BOLD)),
@@ -53,6 +70,9 @@ pub fn r_action_key<'a>(key: &'a str, desc: &'a str, col: Color) -> Line<'a> {
 
 // ── render right ──────────────────────────────────────────────────────────────
 
+/// Entry point for the right panel: routes to the confirmation overlay if an
+/// action is pending, otherwise draws the bordered panel and dispatches to
+/// the per-tab renderer (or nothing, for tabs that don't use this panel).
 pub fn render_right(f: &mut Frame, state: &HubState, area: Rect) {
     if let Some(ref action) = state.confirming {
         render_confirm_overlay(f, state, area, action);
@@ -69,16 +89,17 @@ pub fn render_right(f: &mut Frame, state: &HubState, area: Rect) {
         Tab::Todos       => render_right_todo(f, state, inner),
         Tab::PRs         => render_right_pr(f, state, inner),
         Tab::Issues      => render_right_issue(f, state, inner),
-        Tab::Overview | Tab::Stats | Tab::HubSettings => {}
+        Tab::Overview | Tab::Stats | Tab::Activity | Tab::HubSettings => {}
     }
 }
 
+/// Replaces the right panel with a "are you sure" overlay listing up to 12
+/// of the targeted repos (with a "… and N more" tail) and the y/n prompt,
+/// while `state.confirming` is set.
 fn render_confirm_overlay(f: &mut Frame, state: &HubState, area: Rect, action: &PendingAction) {
     let targets = state.action_targets();
-    let (title, verb) = match action {
-        PendingAction::Sync    => (" Sync ",    "Sync"),
-        PendingAction::Release => (" Release ", "Release"),
-    };
+    let PendingAction::Release = action;
+    let (title, verb) = (" Release ", "Release");
     let blk   = Block::default().borders(Borders::ALL).title(title)
         .style(Style::default().fg(Color::Yellow));
     let inner = blk.inner(area);
@@ -107,6 +128,9 @@ fn render_confirm_overlay(f: &mut Frame, state: &HubState, area: Rect, action: &
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Repo detail panel: branch/owner/project/visibility, ahead/behind + dirty
+/// status, file count, latest tag/language, last commit, an inline diff
+/// preview when the repo is dirty, and the full repo-actions key reference.
 fn render_right_repo(f: &mut Frame, state: &HubState, area: Rect) {
     let actions_h = 20u16;
     let layout = Layout::default()
@@ -147,6 +171,9 @@ fn render_right_repo(f: &mut Frame, state: &HubState, area: Rect) {
         };
         lines.push(r_kv("Changes", dirty_txt,  dirty_col));
         lines.push(r_kv("Remote",  sync_txt,   sync_col));
+        if r.stash_count > 0 {
+            lines.push(r_kv("Stash", &format!("⌂ {} entr{}", r.stash_count, if r.stash_count == 1 { "y" } else { "ies" }), Color::Magenta));
+        }
 
         if let Some(ex) = state.focused_cache.get(&ri) {
             lines.push(r_kv("Files", &format!("{} tracked", ex.file_count), Color::DarkGray));
@@ -236,6 +263,9 @@ fn render_right_repo(f: &mut Frame, state: &HubState, area: Rect) {
     ]), action_inner);
 }
 
+/// Project detail panel: color/repo-count, an aggregate health line (clean,
+/// or counts of dirty/behind member repos), open-todo count, and a preview
+/// of up to 8 member repos flagged by their own dirty/behind state.
 fn render_right_project(f: &mut Frame, state: &HubState, area: Rect) {
     let actions_h = 7u16;
     let layout = Layout::default()
@@ -313,6 +343,9 @@ fn render_right_project(f: &mut Frame, state: &HubState, area: Rect) {
     ]), action_inner);
 }
 
+/// Todo detail panel: status, assigned project, the description text
+/// (word-wrapped to the panel width, up to 6 source lines), and the
+/// created/updated timeline.
 fn render_right_todo(f: &mut Frame, state: &HubState, area: Rect) {
     let actions_h = 6u16;
     let layout = Layout::default()
@@ -338,7 +371,7 @@ fn render_right_todo(f: &mut Frame, state: &HubState, area: Rect) {
 
         if !t.description.is_empty() {
             lines.push(r_section("Description"));
-            let max_w = area.width.saturating_sub(3) as usize;
+            let max_w = (area.width.saturating_sub(3) as usize).max(1);
             for raw_line in t.description.lines().take(6) {
                 for chunk in raw_line.chars().collect::<Vec<_>>().chunks(max_w).map(|c| c.iter().collect::<String>()) {
                     lines.push(Line::from(Span::styled(format!("  {}", chunk), Style::default().fg(Color::DarkGray))));
@@ -367,10 +400,12 @@ fn render_right_todo(f: &mut Frame, state: &HubState, area: Rect) {
     ]), action_inner);
 }
 
+/// PR detail panel: repo, number, title (wrapped over two lines), author,
+/// updated-age, head→base branches, a draft badge, and labels.
 fn render_right_pr(f: &mut Frame, state: &HubState, area: Rect) {
     let di = state.cur_di();
     let pr = di.and_then(|d| {
-        if let DisplayRow::Pr { idx } = &state.display[d] { state.prs.get(*idx) } else { None }
+        if let DisplayRow::Pr { pr_idx } = &state.display[d] { state.prs.get(*pr_idx) } else { None }
     });
 
     let mut lines: Vec<Line> = vec![r_section("Pull Request"), Line::from("")];
@@ -400,10 +435,12 @@ fn render_right_pr(f: &mut Frame, state: &HubState, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+/// Issue detail panel: repo, number, title (wrapped over two lines), author,
+/// updated-age, comment count, and labels.
 fn render_right_issue(f: &mut Frame, state: &HubState, area: Rect) {
     let di = state.cur_di();
     let issue = di.and_then(|d| {
-        if let DisplayRow::Issue { idx } = &state.display[d] { state.issues.get(*idx) } else { None }
+        if let DisplayRow::Issue { issue_idx } = &state.display[d] { state.issues.get(*issue_idx) } else { None }
     });
 
     let mut lines: Vec<Line> = vec![r_section("Issue"), Line::from("")];

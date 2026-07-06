@@ -1,3 +1,6 @@
+//! `Provider` implementation for GitLab (gitlab.com or self-hosted, via a
+//! custom `base_url`), talking to the REST API v4 directly over `reqwest`.
+
 use super::{PrInfo, Provider, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -11,6 +14,9 @@ pub struct GitLabProvider {
 }
 
 impl GitLabProvider {
+    /// Builds a client authenticated with `token`, scoped to `namespace`'s
+    /// projects by default. `base_url` lets this point at a self-hosted
+    /// GitLab instance instead of `gitlab.com`.
     pub fn new(base_url: &str, namespace: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -19,7 +25,7 @@ impl GitLabProvider {
         );
         headers.insert(
             header::USER_AGENT,
-            header::HeaderValue::from_static("fxg/0.1"),
+            header::HeaderValue::from_static("vulp/0.1"),
         );
         let client = Client::builder().default_headers(headers).build()?;
         Ok(Self {
@@ -29,16 +35,22 @@ impl GitLabProvider {
         })
     }
 
+    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
+    /// Builds GitLab's URL-encoded project identifier (`namespace%2Frepo`),
+    /// since the v4 API addresses projects by encoded path rather than a
+    /// separate numeric id field this codebase tracks.
     fn repo_id(&self, repo: &str) -> String {
         // Percent-encode "namespace/repo" for use in URL path segments
         let raw = format!("{}/{}", self.namespace, repo);
         raw.replace('/', "%2F")
     }
 
+    /// Parses a response as JSON if the status was successful, otherwise
+    /// turns the non-2xx status and body into an error.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text = resp.text().await?;
@@ -52,7 +64,7 @@ impl GitLabProvider {
 
 #[async_trait]
 impl Provider for GitLabProvider {
-    async fn create_repo(&self, name: &str, private: bool, description: &str) -> Result<RepoInfo> {
+    async fn create_repo(&self, name: &str, private: bool, description: &str, _owner: Option<&str>) -> Result<RepoInfo> {
         let visibility = if private { "private" } else { "public" };
         let body = json!({
             "name": name,
@@ -141,11 +153,11 @@ impl Provider for GitLabProvider {
     }
 
     async fn add_labels(
-        &self, repo: &str, pr_number: u64, labels: &[String],
+        &self, repo: &str, issue_number: u64, labels: &[String],
     ) -> Result<()> {
         let body = json!({ "add_labels": labels.join(",") });
         let resp = self.client
-            .put(self.url(&format!("projects/{}/merge_requests/{}", self.repo_id(repo), pr_number)))
+            .put(self.url(&format!("projects/{}/merge_requests/{}", self.repo_id(repo), issue_number)))
             .json(&body).send().await?;
         Self::check(resp).await.context("add_labels")?;
         Ok(())

@@ -1,9 +1,16 @@
+//! Persistent application settings (`~/.vulp/config.toml`): workspace
+//! location, defaults for new repos, editor/clipboard preferences, and the
+//! one-time migration from the legacy `~/.fxg` data directory.
+
 pub mod ui;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// All persisted user settings. Loaded once at startup and threaded through
+/// the rest of the app; the hub's HubSettings tab edits a copy and calls
+/// `save_config` to persist changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub workspace_root:      PathBuf,
@@ -32,6 +39,9 @@ pub struct AppConfig {
     pub show_locs:           bool,
 }
 
+/// Picks the first available clipboard tool on PATH as the default
+/// `clipboard_cmd`, so a fresh install works without manual configuration
+/// on most systems.
 fn default_clipboard_cmd() -> String {
     for cmd in &["wl-copy", "xclip", "pbcopy"] {
         if std::process::Command::new("which").arg(cmd).output().map(|o| o.status.success()).unwrap_or(false) {
@@ -46,7 +56,7 @@ impl Default for AppConfig {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
         Self {
             workspace_root:     home.join("projects"),
-            data_dir:           home.join(".fxg"),
+            data_dir:           home.join(".vulp"),
             default_provider:   "github".into(),
             default_branch:     "main".into(),
             default_visibility: "private".into(),
@@ -57,7 +67,7 @@ impl Default for AppConfig {
             readme_template:    "heartbyte-default".into(),
             share_stats:        false,
             timezone:           "Europe/Warsaw".into(),
-            vsc_data_dir:       home.join(".fxg/vsc-data"),
+            vsc_data_dir:       home.join(".vulp/vsc-data"),
             workspace_groups:   vec![],
             clipboard_cmd:      default_clipboard_cmd(),
             show_locs:          false,
@@ -66,6 +76,8 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Lists every editable setting as a `(key, display value)` pair, in
+    /// the order shown by the Config TUI's field list.
     pub fn fields(&self) -> Vec<(&'static str, String)> {
         vec![
             ("workspace_root",     self.workspace_root.to_string_lossy().into()),
@@ -85,6 +97,9 @@ impl AppConfig {
         ]
     }
 
+    /// Sets one field by its `fields()` key name from a freeform string
+    /// (as typed into the Config TUI's edit prompt). Errors on an unknown
+    /// key rather than silently ignoring a typo.
     pub fn set_field(&mut self, key: &str, value: String) -> Result<()> {
         match key {
             "workspace_root"     => self.workspace_root     = PathBuf::from(&value),
@@ -113,13 +128,72 @@ impl AppConfig {
     }
 }
 
+/// Path to the config file, `~/.vulp/config.toml`.
 pub fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".fxg")
+        .join(".vulp")
         .join("config.toml")
 }
 
+/// The pre-rename data directory, kept only so `migrate_legacy_config` can
+/// detect and import it once.
+fn legacy_data_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".fxg")
+}
+
+/// One-time migration from the old `fxg` data directory: if `~/.vulp` doesn't
+/// exist yet but `~/.fxg` does, copy it over wholesale (config, accounts,
+/// tokens, projects, workspaces, cache) so upgrading users keep their setup.
+/// The old directory is left untouched as a safety fallback.
+pub fn migrate_legacy_config() -> Result<Option<PathBuf>> {
+    let new_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(".vulp");
+    let old_dir = legacy_data_dir();
+    if new_dir.exists() || !old_dir.exists() {
+        return Ok(None);
+    }
+    copy_dir_recursive(&old_dir, &new_dir)?;
+
+    // The copied config.toml still has data_dir/vsc_data_dir pointing at the
+    // old ~/.fxg paths — repoint them at the new location so accounts.toml
+    // and friends (which read cfg.data_dir) don't silently keep writing there.
+    let cfg_path = new_dir.join("config.toml");
+    if cfg_path.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
+            if let Ok(mut cfg) = toml::from_str::<AppConfig>(&raw) {
+                if cfg.data_dir == old_dir {
+                    cfg.data_dir = new_dir.clone();
+                }
+                if cfg.vsc_data_dir == old_dir.join("vsc-data") {
+                    cfg.vsc_data_dir = new_dir.join("vsc-data");
+                }
+                let _ = std::fs::write(&cfg_path, toml::to_string_pretty(&cfg)?);
+            }
+        }
+    }
+    Ok(Some(old_dir))
+}
+
+/// Recursively copies every file and subdirectory from `src` into `dst`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Loads the config file, or `AppConfig::default()` if it doesn't exist yet
+/// (first run).
 pub fn load_config() -> Result<AppConfig> {
     let path = config_path();
     if path.exists() {
@@ -130,6 +204,7 @@ pub fn load_config() -> Result<AppConfig> {
     }
 }
 
+/// Writes `cfg` to the config file, creating `~/.vulp/` if needed.
 pub fn save_config(cfg: &AppConfig) -> Result<()> {
     let path = config_path();
     ensure_parent(&path)?;
@@ -137,6 +212,7 @@ pub fn save_config(cfg: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Creates `cfg.data_dir` and `cfg.vsc_data_dir` if they don't already exist.
 #[allow(dead_code)]
 pub fn ensure_data_dir(cfg: &AppConfig) -> Result<()> {
     std::fs::create_dir_all(&cfg.data_dir)?;
@@ -151,6 +227,8 @@ fn ensure_parent(p: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Entry point for `vulp config`: opens the interactive settings TUI and
+/// persists whatever the user changed.
 pub async fn run(cfg: AppConfig) -> Result<()> {
     let updated = ui::run_config_tui(cfg)?;
     save_config(&updated)?;

@@ -1,16 +1,21 @@
+//! The hub's main event loop: one terminal frame, one input event, dispatched
+//! to whichever input mode is active (modal open, confirm prompt, filter
+//! typing, or the plain global keymap in `keys_dispatch`), plus the two
+//! lazy-loaders that kick off a background fetch the first time their tab
+//! is opened.
+
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEventKind};
-use super::actions::{copy_to_clipboard, get_remote_url, refresh_repos, scan_todos_from_repos, save_bookmarks, save_pins, to_web_url};
+use crossterm::event::{Event, KeyCode, MouseEventKind};
 use super::modals::{handle_modal_key, process_modal_confirm};
-use super::render::{render_hub, HELP_LINES};
-use super::state::{
-    ConfirmTag, DisplayRow, HubState, Modal, ModalAction, PendingAction,
-    PhaseResult, SelectTag, Tab, TextTag,
-};
-use crate::todos;
+use super::render::render_hub;
+use super::state::{HubState, Modal, ModalAction, PendingAction, PhaseResult, Tab};
+use super::{keys_dispatch, keys_poll};
 
 pub fn maybe_load_global_stats(state: &mut HubState) {
-    if state.tab != Tab::Stats { return; }
+    if !matches!(state.tab, Tab::Stats | Tab::Overview) { return; }
+    // Wait for the workspace scan to finish — computing stats from a
+    // partially-streamed repo list bakes in an empty/incomplete snapshot.
+    if state.scan_rx.is_some() { return; }
     if state.global_stats.is_some() || state.global_stats_rx.is_some() { return; }
 
     let repos_snapshot: Vec<(String, std::path::PathBuf, Option<String>, bool, usize)> = state.repos.iter()
@@ -47,6 +52,7 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
         let mut day_pattern = [0usize; 7];
         for (date_str, count) in &all_dates {
             if let Ok(d) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                use chrono::Datelike;
                 let wd = d.weekday().num_days_from_monday() as usize;
                 day_pattern[wd] += count;
             }
@@ -55,18 +61,24 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
         let mut activity: Vec<(String, usize)> = all_dates.into_iter().collect();
         activity.sort_by(|a, b| a.0.cmp(&b.0));
         top_repos.sort_by(|a, b| b.1.cmp(&a.1));
+        let repo_commits = top_repos.clone();
         top_repos.truncate(5);
 
         let mut lang_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (_, _, lang, _, _) in &repos_snapshot {
-            if let Some(l) = lang { *lang_map.entry(l.clone()).or_default() += 1; }
+            // Repo lang strings can carry a percentage suffix ("TypeScript 92%") —
+            // aggregate on the bare language name so they count as one language.
+            if let Some(l) = lang {
+                let name = l.split_whitespace().next().unwrap_or(l).to_string();
+                *lang_map.entry(name).or_default() += 1;
+            }
         }
         let mut lang_dist: Vec<(String, usize)> = lang_map.into_iter().collect();
         lang_dist.sort_by(|a, b| b.1.cmp(&a.1));
         lang_dist.truncate(8);
 
         let _ = tx.send(GlobalStats {
-            activity, lang_dist, top_repos, total_commits,
+            activity, lang_dist, top_repos, repo_commits, total_commits,
             dirty_count, behind_count,
             day_pattern,
         });
@@ -76,29 +88,84 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
     state.status_msg = Some("Computing global stats...".into());
 }
 
+/// Builds the Activity tab's feed: git commits + tags (ground truth, sourced
+/// straight from each repo's history, regardless of how the activity
+/// happened) merged with PR/issue timestamps already in memory, merged with
+/// the locally-logged push/pull/release/new-repo/todo events that only vulp
+/// itself can see (see `crate::activity`).
+pub fn maybe_load_activity(state: &mut HubState) {
+    if state.tab != Tab::Activity { return; }
+    if state.activity_feed.is_some() || state.activity_rx.is_some() { return; }
+
+    let repos_snapshot: Vec<(String, std::path::PathBuf)> = state.repos.iter()
+        .map(|r| (r.name.clone(), r.path.clone())).collect();
+    let mut entries: Vec<crate::activity::ActivityEntry> = state.prs.iter().map(|pr| {
+        crate::activity::ActivityEntry {
+            ts: pr.created_ts, kind: crate::activity::ActivityKind::Pr,
+            repo: pr.repo.clone(), detail: format!("#{} {} (@{})", pr.number, pr.title, pr.author),
+        }
+    }).collect();
+    entries.extend(state.issues.iter().map(|iss| {
+        crate::activity::ActivityEntry {
+            ts: iss.created_ts, kind: crate::activity::ActivityKind::Issue,
+            repo: iss.repo.clone(), detail: format!("#{} {} (@{})", iss.number, iss.title, iss.author),
+        }
+    }));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut entries = entries;
+        entries.extend(crate::activity::load_logged());
+        for (name, path) in &repos_snapshot {
+            for h in crate::detail::build_history_pub(path, 200) {
+                match h {
+                    crate::detail::HistEntry::Commit { ts, author, msg, .. } => {
+                        entries.push(crate::activity::ActivityEntry {
+                            ts, kind: crate::activity::ActivityKind::Commit,
+                            repo: name.clone(), detail: format!("{author}: {msg}"),
+                        });
+                    }
+                    crate::detail::HistEntry::Tag { ts, name: tag, msg, .. } => {
+                        entries.push(crate::activity::ActivityEntry {
+                            ts, kind: crate::activity::ActivityKind::Release,
+                            repo: name.clone(), detail: if msg.is_empty() { tag } else { format!("{tag}: {msg}") },
+                        });
+                    }
+                }
+            }
+        }
+        entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+        entries.truncate(2000);
+        let _ = tx.send(entries);
+    });
+
+    state.activity_rx = Some(rx);
+    state.status_msg = Some("Loading activity...".into());
+}
+
+/// Runs the hub's TUI for one or more frames until something needs to leave
+/// the loop: draws a frame, polls every background channel, reads one input
+/// event, and routes it to whichever input mode is currently active. Modal/
+/// confirm/filter input short-circuit here (they're loop control flow, not
+/// part of the global keymap); everything else goes to `keys_dispatch`.
 pub fn tui_phase(state: &mut HubState) -> Result<(PhaseResult, Option<crate::tui::Tty>)> {
     let mut terminal = crate::tui::setup()?;
     let result = (|| -> Result<PhaseResult> {
         loop {
             state.poll_incoming();
+            // No-op until the scan completes and only on Overview/Stats —
+            // kicks off the first stats computation once repos are final.
+            maybe_load_global_stats(state);
             state.poll_diff();
             state.poll_global_stats();
-            // poll pull-all background worker
-            {
-                let done = if let Some(rx) = &state.pull_all_rx {
-                    let mut finished = false;
-                    while let Ok(msg) = rx.try_recv() {
-                        if msg == "DONE" { finished = true; }
-                        else { state.status_msg = Some(msg); }
-                    }
-                    finished
-                } else { false };
-                if done {
-                    state.pull_all_rx = None;
-                    state.status_msg  = Some("Pull-all complete! Refreshing...".into());
-                    refresh_repos(state);
-                }
-            }
+            state.poll_activity();
+            state.poll_release_info();
+            state.poll_codeintel();
+            keys_poll::poll_pull_all(state);
+            keys_poll::poll_create_repo(state);
+            keys_poll::poll_profile_pull(state);
+            keys_poll::poll_refresh(state);
+
             terminal.draw(|f| render_hub(f, state))?;
             state.update_focused_extra();
 
@@ -119,553 +186,59 @@ pub fn tui_phase(state: &mut HubState) -> Result<(PhaseResult, Option<crate::tui
                 continue;
             }
             let key = match event { Some(Event::Key(k)) => k, _ => continue };
-            {
+
             if state.modal.is_some() {
-                    match handle_modal_key(&mut state.modal, key.code) {
-                        ModalAction::Confirm => process_modal_confirm(state),
-                        ModalAction::Cancel  => state.modal = Modal::None,
-                        ModalAction::Pending => {}
-                    }
-                    if let Some(url) = state.pending_clone.take() {
-                        return Ok(PhaseResult::ExecClone(url));
-                    }
-                    if let Some(phase) = state.pending_phase.take() {
-                        return Ok(phase);
-                    }
-                    continue;
+                match handle_modal_key(&mut state.modal, key.code) {
+                    ModalAction::Confirm => process_modal_confirm(state),
+                    ModalAction::Cancel  => state.modal = Modal::None,
+                    ModalAction::Pending => {}
                 }
-
-                if state.confirming.is_some() {
-                    match key.code {
-                        KeyCode::Char('y') => { state.exec_action = true; }
-                        KeyCode::Esc       => { state.confirming = None; }
-                        _ => {}
-                    }
-                    if state.exec_action {
-                        let r = match state.confirming.as_ref().unwrap() {
-                            PendingAction::Sync    => PhaseResult::ExecSync,
-                            PendingAction::Release => PhaseResult::ExecRelease,
-                        };
-                        return Ok(r);
-                    }
-                    continue;
+                if let Some(url) = state.pending_clone.take() {
+                    return Ok(PhaseResult::ExecClone(url));
                 }
-
-                if state.filtering {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('/') => {
-                            state.filtering = false;
-                            state.filter_text.clear();
-                            state.rebuild_display();
-                        }
-                        KeyCode::Enter => { state.filtering = false; }
-                        KeyCode::Backspace => {
-                            state.filter_text.pop();
-                            state.rebuild_display();
-                        }
-                        KeyCode::Char(c) => {
-                            state.filter_text.push(c);
-                            state.rebuild_display();
-                        }
-                        _ => {}
-                    }
-                    continue;
+                if let Some(phase) = state.pending_phase.take() {
+                    return Ok(phase);
                 }
+                continue;
+            }
 
-                state.status_msg = None;
+            if state.confirming.is_some() {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        if !state.filter_text.is_empty() {
-                            state.filter_text.clear(); state.rebuild_display();
-                        } else {
-                            state.quit = true; return Ok(PhaseResult::None);
-                        }
-                    }
-                    KeyCode::Up   | KeyCode::Char('k') => {
-                        if state.tab == Tab::HubSettings {
-                            state.hub_settings_cur = state.hub_settings_cur.saturating_sub(1);
-                        } else {
-                            state.scroll_up();
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if state.tab == Tab::HubSettings {
-                            let max = 10 + 1 + state.templates.len();
-                            if state.hub_settings_cur + 1 < max { state.hub_settings_cur += 1; }
-                        } else {
-                            state.scroll_down();
-                        }
-                    }
-                    KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let visible: Vec<usize> = state.display.iter().filter_map(|row| {
-                            if let DisplayRow::Repo { repo_idx } = row { Some(*repo_idx) } else { None }
-                        }).collect();
-                        let all_sel = visible.iter().all(|ri| state.selected.contains(ri));
-                        if all_sel {
-                            state.selected.clear();
-                            state.status_msg = Some("All deselected".into());
-                        } else {
-                            for ri in visible { state.selected.insert(ri); }
-                            state.status_msg = Some(format!("Selected {} repos", state.selected.len()));
-                        }
-                    }
-                    KeyCode::Char('*') => {
-                        state.modal = Modal::Select {
-                            title: "Select by condition".into(),
-                            options: vec![
-                                "All visible".into(),
-                                "Dirty (uncommitted changes)".into(),
-                                "Behind remote".into(),
-                                "Ahead of remote".into(),
-                                "No license".into(),
-                                "Language: Rust".into(),
-                                "Language: TypeScript".into(),
-                                "Language: Python".into(),
-                                "Language: Go".into(),
-                            ],
-                            cursor: 0,
-                            tag: SelectTag::SelectByCondition,
-                        };
-                    }
-                    KeyCode::Char(' ') => {
-                        match state.tab {
-                            Tab::Todos => {
-                                if let Some(ti) = state.cur_todo_idx() {
-                                    state.todos[ti].status = state.todos[ti].status.cycle();
-                                    state.todos[ti].touch();
-                                    let _ = todos::save(&state.todos);
-                                }
-                            }
-                            _ => state.toggle_select(),
-                        }
-                    }
-                    KeyCode::Tab | KeyCode::Right => {
-                        state.tab = match state.tab {
-                            Tab::Overview    => Tab::Repos,
-                            Tab::Repos       => Tab::Projects,
-                            Tab::Projects    => Tab::Todos,
-                            Tab::Todos       => Tab::PRs,
-                            Tab::PRs         => Tab::Issues,
-                            Tab::Issues      => Tab::Stats,
-                            Tab::Stats       => Tab::HubSettings,
-                            Tab::HubSettings => Tab::Overview,
-                        };
-                        state.cursor = 0; state.offset = 0; state.selected.clear();
-                        state.rebuild_display();
-                        maybe_load_global_stats(state);
-                    }
-                    KeyCode::Left => {
-                        state.tab = match state.tab {
-                            Tab::Overview    => Tab::HubSettings,
-                            Tab::Repos       => Tab::Overview,
-                            Tab::Projects    => Tab::Repos,
-                            Tab::Todos       => Tab::Projects,
-                            Tab::PRs         => Tab::Todos,
-                            Tab::Issues      => Tab::PRs,
-                            Tab::Stats       => Tab::Issues,
-                            Tab::HubSettings => Tab::Stats,
-                        };
-                        state.cursor = 0; state.offset = 0; state.selected.clear();
-                        state.rebuild_display();
-                        maybe_load_global_stats(state);
-                    }
-                    KeyCode::Enter => {
-                        match state.tab {
-                            Tab::Repos | Tab::Projects => {
-                                if state.cur_repo_idx().is_some() || state.cur_proj_idx().is_some() {
-                                    state.open_detail = true;
-                                    return Ok(PhaseResult::OpenDetail);
-                                }
-                            }
-                            Tab::PRs => {
-                                let di = state.cur_di();
-                                if let Some(di) = di {
-                                    if let DisplayRow::Pr { idx } = &state.display[di] {
-                                        let url = state.prs[*idx].url.clone();
-                                        if !url.is_empty() {
-                                            crate::util::open_path(&url);
-                                            state.status_msg = Some("Opening PR in browser...".into());
-                                        }
-                                    }
-                                }
-                            }
-                            Tab::Issues => {
-                                let di = state.cur_di();
-                                if let Some(di) = di {
-                                    if let DisplayRow::Issue { idx } = &state.display[di] {
-                                        let url = state.issues[*idx].url.clone();
-                                        if !url.is_empty() {
-                                            crate::util::open_path(&url);
-                                            state.status_msg = Some("Opening issue in browser...".into());
-                                        }
-                                    }
-                                }
-                            }
-                            Tab::Todos | Tab::Overview | Tab::Stats => {}
-                            Tab::HubSettings => {
-                                match state.hub_settings_cur {
-                                    0 => {
-                                        state.modal = Modal::Text {
-                                            title: "Workspace Root".into(),
-                                            prompt: "Absolute path (~ supported):".into(),
-                                            value: state.workspace_root.to_string_lossy().to_string(),
-                                            tag: TextTag::SetWorkspace,
-                                            max_len: None,
-                                        };
-                                    }
-                                    1 => {
-                                        state.modal = Modal::Text {
-                                            title: "Editor".into(),
-                                            prompt: "Command (e.g. nvim, code):".into(),
-                                            value: state.editor.clone(),
-                                            tag: TextTag::SetEditor,
-                                            max_len: Some(60),
-                                        };
-                                    }
-                                    2 => {
-                                        state.modal = Modal::Text {
-                                            title: "Clipboard Command".into(),
-                                            prompt: "Command (e.g. xclip -sel clip):".into(),
-                                            value: state.clipboard_cmd.clone(),
-                                            tag: TextTag::SetClipboard,
-                                            max_len: Some(60),
-                                        };
-                                    }
-                                    7 => {
-                                        if state.accounts.is_empty() {
-                                            state.status_msg = Some("No accounts — run: fxg auth import".into());
-                                        } else if state.accounts.len() == 1 {
-                                            let name = format!("@{} ({})", state.accounts[0].username, state.accounts[0].provider);
-                                            state.modal = Modal::Confirm {
-                                                message: format!("Pull all repos for {}?", name),
-                                                tag: ConfirmTag::PullAll(0),
-                                            };
-                                        } else {
-                                            let opts: Vec<String> = state.accounts.iter()
-                                                .map(|a| format!("@{} ({})", a.username, a.provider))
-                                                .collect();
-                                            state.modal = Modal::Select {
-                                                title: "Pull all repos — Account".into(),
-                                                options: opts,
-                                                cursor: 0,
-                                                tag: SelectTag::PullAllAccount,
-                                            };
-                                        }
-                                    }
-                                    8 => {
-                                        state.modal = Modal::Text {
-                                            title: "Import Directory as Repos".into(),
-                                            prompt: "Directory to scan (git init + link each subfolder):".into(),
-                                            value: String::new(),
-                                            tag: TextTag::ImportDir,
-                                            max_len: None,
-                                        };
-                                    }
-                                    9 => {
-                                        let n = state.repos.len();
-                                        state.modal = Modal::Confirm {
-                                            message: format!("DANGER: Delete .git from all {} repos in workspace? Cannot be undone!", n),
-                                            tag: ConfirmTag::RemoveGitAll,
-                                        };
-                                    }
-                                    10 => {
-                                        state.modal = Modal::Text {
-                                            title: "New Template — Name".into(),
-                                            prompt: "Template name:".into(),
-                                            value: String::new(),
-                                            tag: TextTag::NewTemplateName,
-                                            max_len: Some(50),
-                                        };
-                                    }
-                                    n if n >= 11 => {
-                                        let ti = n - 11;
-                                        if ti < state.templates.len() {
-                                            let t = &state.templates[ti];
-                                            let cmd_preview = t.commands.iter().take(2).cloned().collect::<Vec<_>>().join("; ");
-                                            let cmd_str = if cmd_preview.is_empty() { "(no commands)".into() } else { cmd_preview };
-                                            state.modal = Modal::Select {
-                                                title: format!("Template: {}", t.name),
-                                                options: vec![
-                                                    format!("Commands: {}", cmd_str.chars().take(40).collect::<String>()),
-                                                    "Delete template".into(),
-                                                ],
-                                                cursor: 0,
-                                                tag: SelectTag::TemplateMenu(ti),
-                                            };
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    KeyCode::Char('s') => {
-                        if !state.action_targets().is_empty() {
-                            state.modal = Modal::Select {
-                                title: "Sync — Action".into(),
-                                options: vec!["Pull".into(), "Commit+Push".into(), "Push only".into()],
-                                cursor: 0,
-                                tag: SelectTag::SyncAction,
-                            };
-                        }
-                    }
-                    KeyCode::Char('r') => {
-                        if !state.action_targets().is_empty() { state.confirming = Some(PendingAction::Release); }
-                    }
-                    KeyCode::Char('n') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let cur = state.repos[ri].name.clone();
-                            state.modal = Modal::Text { title: "Set label".into(), prompt: "Display name (blank = reset):".into(), value: cur, tag: TextTag::Label(ri), max_len: Some(60) };
-                        }
-                    }
-                    KeyCode::Char('p') if state.tab == Tab::Stats => {
-                        state.global_stats        = None;
-                        state.global_stats_rx     = None;
-                        state.global_stats_period = state.global_stats_period.next();
-                        maybe_load_global_stats(state);
-                    }
-                    KeyCode::Char('<') if state.tab == Tab::Stats => {
-                        state.global_stats        = None;
-                        state.global_stats_rx     = None;
-                        state.global_stats_period = state.global_stats_period.prev();
-                        maybe_load_global_stats(state);
-                    }
-                    KeyCode::Char('p') => {
-                        let mut opts = vec!["Create project".to_string()];
-                        if !state.projects.is_empty() {
-                            opts.push("Assign repos".into());
-                            opts.push("Rename / recolor".into());
-                            opts.push("Delete project".into());
-                        }
-                        state.modal = Modal::Select { title: "Projects".into(), options: opts, cursor: 0, tag: SelectTag::ProjMenu };
-                    }
-                    KeyCode::Char('+') => {
-                        state.modal = Modal::Text { title: "New todo — Title".into(), prompt: "Title:".into(), value: String::new(), tag: TextTag::TodoTitle, max_len: Some(100) };
-                    }
-                    KeyCode::Char('e') => {
-                        if let Some(ti) = state.cur_todo_idx() {
-                            let cur = state.todos[ti].title.clone();
-                            state.modal = Modal::Text { title: "Edit todo — Title".into(), prompt: "Title:".into(), value: cur, tag: TextTag::TodoEditTitle(ti), max_len: Some(100) };
-                        }
-                    }
-                    KeyCode::Delete | KeyCode::Char('D') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                        if state.tab == Tab::Todos {
-                            if let Some(ti) = state.cur_todo_idx() {
-                                let title = state.todos[ti].title.clone();
-                                state.modal = Modal::Confirm { message: format!("Delete '{}'?", title), tag: ConfirmTag::DeleteTodo(ti) };
-                            }
-                        } else if state.tab == Tab::Projects {
-                            if let Some(pi) = state.cur_proj_idx() {
-                                let name = state.projects[pi].name.clone();
-                                state.modal = Modal::Confirm { message: format!("Delete project '{}'?", name), tag: ConfirmTag::DeleteProject(pi) };
-                            }
-                        }
-                    }
-                    KeyCode::Delete => {
-                        if state.tab == Tab::Todos {
-                            if let Some(ti) = state.cur_todo_idx() {
-                                let title = state.todos[ti].title.clone();
-                                state.modal = Modal::Confirm { message: format!("Delete '{}'?", title), tag: ConfirmTag::DeleteTodo(ti) };
-                            }
-                        } else if state.tab == Tab::Projects {
-                            if let Some(pi) = state.cur_proj_idx() {
-                                let name = state.projects[pi].name.clone();
-                                state.modal = Modal::Confirm { message: format!("Delete project '{}'?", name), tag: ConfirmTag::DeleteProject(pi) };
-                            }
-                        }
-                    }
-                    KeyCode::Char('d') => { state.filter_dirty  = !state.filter_dirty;  state.rebuild_display(); }
-                    KeyCode::Char('b') => { state.filter_behind = !state.filter_behind; state.rebuild_display(); }
-                    KeyCode::Char('f') => { state.filter_ahead  = !state.filter_ahead;  state.rebuild_display(); }
-                    KeyCode::Char('/') => {
-                        state.filtering = true;
+                    KeyCode::Char('y') => { state.exec_action = true; }
+                    KeyCode::Esc       => { state.confirming = None; }
+                    _ => {}
+                }
+                if state.exec_action {
+                    let PendingAction::Release = state.confirming.as_ref().unwrap();
+                    return Ok(PhaseResult::ExecRelease);
+                }
+                continue;
+            }
+
+            if state.filtering {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('/') => {
+                        state.filtering = false;
                         state.filter_text.clear();
                         state.rebuild_display();
                     }
-                    KeyCode::Char('?') => {
-                        state.modal = Modal::Info {
-                            title: "Keybindings".into(),
-                            lines: HELP_LINES.iter().map(|s| s.to_string()).collect(),
-                            scroll: 0,
-                        };
-                    }
-                    KeyCode::Char('S') => {
-                        let sm = state.sort_mode;
-                        let dot = |m: super::state::SortMode| if sm == m { "●" } else { "○" };
-                        let chk = |b: bool| if b { "✓" } else { " " };
-                        state.modal = Modal::Select {
-                            title: "Sort & Filter".into(),
-                            options: vec![
-                                format!("{}  Default order",     dot(super::state::SortMode::Default)),
-                                format!("{}  By name",           dot(super::state::SortMode::Name)),
-                                format!("{}  By recent commit",  dot(super::state::SortMode::Age)),
-                                format!("{}  Dirty first",       dot(super::state::SortMode::DirtyFirst)),
-                                format!("{}  Behind first",      dot(super::state::SortMode::BehindFirst)),
-                                format!("[{}] Show dirty only",  chk(state.filter_dirty)),
-                                format!("[{}] Show behind only", chk(state.filter_behind)),
-                                format!("[{}] Show ahead only",  chk(state.filter_ahead)),
-                                format!("[{}] Show archived",    chk(state.filter_archived)),
-                                "    Reset all".into(),
-                            ],
-                            cursor: 0,
-                            tag: SelectTag::SortFilter,
-                        };
-                    }
-                    KeyCode::Char('o') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            state.pending_phase = Some(PhaseResult::ExecOpenEditor(path));
-                        }
-                    }
-                    KeyCode::Char('y') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.to_string_lossy().to_string();
-                            let cmd  = state.clipboard_cmd.clone();
-                            if copy_to_clipboard(&path, &cmd) {
-                                state.status_msg = Some("Path copied!".into());
-                            } else {
-                                state.status_msg = Some("No clipboard cmd".into());
-                            }
-                        }
-                    }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            state.modal = Modal::Select {
-                                title: "Copy URL".into(),
-                                options: vec!["SSH URL (git@…)".into(), "HTTPS URL (https://…)".into()],
-                                cursor: 0,
-                                tag: SelectTag::CopyUrl(path),
-                            };
-                        }
-                    }
-                    KeyCode::Char('u') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            let cmd  = state.clipboard_cmd.clone();
-                            if let Some(url) = get_remote_url(&path) {
-                                if copy_to_clipboard(&url, &cmd) {
-                                    state.status_msg = Some("SSH URL copied!".into());
-                                } else {
-                                    state.status_msg = Some(format!("  {}", url));
-                                }
-                            } else {
-                                state.status_msg = Some("No remote origin".into());
-                            }
-                        }
-                    }
-                    KeyCode::Char('B') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            if state.bookmarks.contains(&path) {
-                                state.bookmarks.remove(&path);
-                                state.repos[ri].bookmarked = false;
-                                state.status_msg = Some("Bookmark removed".into());
-                            } else {
-                                state.bookmarks.insert(path.clone());
-                                state.repos[ri].bookmarked = true;
-                                state.status_msg = Some("Bookmarked!".into());
-                            }
-                            save_bookmarks(&state.bookmarks);
-                            state.rebuild_display();
-                        }
-                    }
-                    KeyCode::Char('T') => {
-                        let count = scan_todos_from_repos(state);
-                        state.status_msg = Some(format!("Scanned: {} new code todos", count));
-                        state.tab = Tab::Todos;
-                        state.show_code_todos = true;
+                    KeyCode::Enter => { state.filtering = false; }
+                    KeyCode::Backspace => {
+                        state.filter_text.pop();
                         state.rebuild_display();
                     }
-                    KeyCode::Char('X') => {
-                        if state.tab == Tab::Todos {
-                            state.show_code_todos = !state.show_code_todos;
-                            state.rebuild_display();
-                            state.status_msg = Some(if state.show_code_todos {
-                                "Showing code scan todos".into()
-                            } else {
-                                "Showing manual todos only".into()
-                            });
-                        }
-                    }
-                    KeyCode::Char('g') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let gitignore = state.repos[ri].path.join(".gitignore");
-                            state.pending_phase = Some(PhaseResult::ExecOpenEditor(gitignore));
-                            state.status_msg = Some("Opening .gitignore...".into());
-                        }
-                    }
-                    KeyCode::Char('O') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.to_string_lossy().to_string();
-                            crate::util::open_path(&path);
-                            state.status_msg = Some("Opening in file manager...".into());
-                        }
-                    }
-                    KeyCode::Char('W') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            if let Some(url) = get_remote_url(&path) {
-                                let web = to_web_url(&url);
-                                crate::util::open_path(&web);
-                                state.status_msg = Some("Opening in browser...".into());
-                            } else {
-                                state.status_msg = Some("No remote origin".into());
-                            }
-                        }
-                    }
-                    KeyCode::Char('P') => {
-                        if let Some(ri) = state.cur_repo_idx() {
-                            let path = state.repos[ri].path.clone();
-                            if state.pins.contains(&path) {
-                                state.pins.remove(&path);
-                                state.status_msg = Some("Unpinned".into());
-                            } else {
-                                state.pins.insert(path.clone());
-                                state.status_msg = Some("Pinned to top! ◆".into());
-                            }
-                            save_pins(&state.pins);
-                            state.rebuild_display();
-                        }
-                    }
-                    KeyCode::Char('a') => {
-                        state.filter_archived = !state.filter_archived;
+                    KeyCode::Char(c) => {
+                        state.filter_text.push(c);
                         state.rebuild_display();
                     }
-                    KeyCode::Char('N') => {
-                        state.modal = Modal::Select {
-                            title: "New repository".into(),
-                            options: vec![
-                                "Clone from URL".into(),
-                                "Clone local folder (path)".into(),
-                                "Create new empty repo".into(),
-                                "Link existing folder".into(),
-                            ],
-                            cursor: 0,
-                            tag: SelectTag::NewRepo,
-                        };
-                    }
-                    KeyCode::Char('R') => {
-                        state.status_msg = Some("Fetching from GitHub API...".into());
-                        return Ok(PhaseResult::ExecRefresh);
-                    }
-
-                    // Direct tab switching (number keys)
-                    KeyCode::Char('1') => { state.tab = Tab::Overview;    state.rebuild_display(); }
-                    KeyCode::Char('2') => { state.tab = Tab::Repos;       state.rebuild_display(); }
-                    KeyCode::Char('3') => { state.tab = Tab::Projects;    state.rebuild_display(); }
-                    KeyCode::Char('4') => { state.tab = Tab::Todos;       state.rebuild_display(); }
-                    KeyCode::Char('5') => { state.tab = Tab::PRs;         state.rebuild_display(); }
-                    KeyCode::Char('6') => { state.tab = Tab::Issues;      state.rebuild_display(); }
-                    KeyCode::Char('7') => {
-                        state.tab = Tab::Stats;
-                        state.rebuild_display();
-                        maybe_load_global_stats(state);
-                    }
-                    KeyCode::Char('8') => { state.tab = Tab::HubSettings; state.rebuild_display(); }
-
                     _ => {}
                 }
+                continue;
+            }
+
+            state.status_msg = None;
+            if let Some(phase) = keys_dispatch::handle_global_key(state, key) {
+                return Ok(phase);
             }
         }
     })();

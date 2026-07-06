@@ -1,3 +1,7 @@
+//! Clipboard writers: a configured-command variant (`copy_to_clipboard`,
+//! used when the user has set `clipboard_cmd` in config) and an
+//! auto-detecting fallback (`copy_auto`) that tries the common Linux tools.
+
 use std::io::Write as _;
 
 /// Copy text using a configured command string (e.g. "wl-copy" or "xclip -selection clipboard").

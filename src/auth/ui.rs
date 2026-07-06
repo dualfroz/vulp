@@ -1,3 +1,9 @@
+//! Standalone TUI for `vulp auth` with no subcommand: lists configured
+//! accounts and lets the user remove one or change the default. Adding an
+//! account isn't done here — it needs an interactive token prompt, which
+//! doesn't fit cleanly inside this raw-mode loop, so that's deferred to the
+//! `vulp auth add` CLI form instead.
+
 use crate::auth::Account;
 use crate::config::AppConfig;
 use crate::tui;
@@ -17,10 +23,12 @@ struct State {
     quit:     bool,
 }
 
+/// Draws the account table (provider, alias, email, default marker) and the
+/// key-hint/status line below it.
 fn render(f: &mut Frame, state: &State) {
     let area = f.area();
     let outer = Block::default()
-        .title(" fxg — Authenticated Accounts ")
+        .title(" vulp — Authenticated Accounts ")
         .borders(Borders::ALL);
     let inner = outer.inner(area);
     f.render_widget(outer, area);
@@ -69,6 +77,8 @@ fn render(f: &mut Frame, state: &State) {
     );
 }
 
+/// Runs the account-management TUI until the user quits, returning the
+/// (possibly modified) account list for the caller to persist.
 pub fn run_auth_tui(mut accounts: Vec<Account>, _cfg: &AppConfig) -> Result<Vec<Account>> {
     let mut state = State { accounts: accounts.clone(), selected: 0, status: None, quit: false };
 
@@ -87,7 +97,7 @@ pub fn run_auth_tui(mut accounts: Vec<Account>, _cfg: &AppConfig) -> Result<Vec<
                 KeyCode::Char('a') => {
                     // must restore terminal temporarily for inquire
                     // handled outside the raw-mode loop
-                    state.status = Some("  Press [q] first, then use: fxg auth add --provider <p> --token <t>".into());
+                    state.status = Some("  Press [q] first, then use: vulp auth add --provider <p> --token <t>".into());
                 }
                 KeyCode::Char('r') => {
                     if let Some(a) = state.accounts.get(state.selected) {

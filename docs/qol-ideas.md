@@ -1,4 +1,4 @@
-# fxg — pomysły na QoL (Quality of Life)
+# vulp — pomysły na QoL (Quality of Life)
 
 > Dokument roboczy. Każdy pomysł ma tytuł, opis, przykład użycia i szacunkową trudność implementacji.
 
@@ -6,21 +6,21 @@
 
 ## Wysoki priorytet
 
-### 1. `fxg clone` — pobierz wszystkie repozytoria jedną komendą
+### 1. `vulp clone` — pobierz wszystkie repozytoria jedną komendą
 
 **Problem:** Na nowym laptopie masz 50 repo na GitHubie. Musisz je klonować jedno po drugim. Żmudne.
 
 **Rozwiązanie:** Komenda pobierająca listę repo z API i klonująca je do `workspace_root`.
 
 ```bash
-fxg clone --mine            # repo których jesteś właścicielem
-fxg clone --contributed     # repo w których robiłeś commity (contributor)
-fxg clone --org mojaFirma   # wszystkie repo organizacji
-fxg clone --starred         # repo które oznaczyłeś gwiazdką
+vulp clone --mine            # repo których jesteś właścicielem
+vulp clone --contributed     # repo w których robiłeś commity (contributor)
+vulp clone --org mojaFirma   # wszystkie repo organizacji
+vulp clone --starred         # repo które oznaczyłeś gwiazdką
 
 # z filtrowaniem
-fxg clone --mine --filter "frontend"    # tylko repo z "frontend" w nazwie
-fxg clone --mine --limit 20            # max 20 repo
+vulp clone --mine --filter "frontend"    # tylko repo z "frontend" w nazwie
+vulp clone --mine --limit 20            # max 20 repo
 ```
 
 **Implementacja:** Wywołać `provider.list_repos()` (nowa metoda w trait `Provider`), przefiltrować, wywołać `git clone` dla każdego. Wyświetlić progress w TUI podobny do `sync`.
@@ -37,15 +37,15 @@ fxg clone --mine --limit 20            # max 20 repo
 
 ```bash
 # przy tworzeniu repo
-fxg init moj-projekt --tags dev,frontend
+vulp init moj-projekt --tags dev,frontend
 
 # retroaktywnie
-fxg tag moj-projekt add client-acme
-fxg tag moj-projekt remove dev
+vulp tag moj-projekt add client-acme
+vulp tag moj-projekt remove dev
 
 # reorganizacja lokalna — przenieś foldery według tagów
-fxg workspace organize        # pyta o potwierdzenie przed każdym przeniesieniem
-fxg workspace organize --dry-run   # pokaż co by się przeniosło, bez wykonania
+vulp workspace organize        # pyta o potwierdzenie przed każdym przeniesieniem
+vulp workspace organize --dry-run   # pokaż co by się przeniosło, bez wykonania
 ```
 
 **Wynikowa struktura:**
@@ -67,21 +67,21 @@ fxg workspace organize --dry-run   # pokaż co by się przeniosło, bez wykonani
 
 ---
 
-### 3. Domyślna paczka plików przy `fxg init`
+### 3. Domyślna paczka plików przy `vulp init`
 
 **Problem:** Przy tworzeniu repo trzeba pamiętać o zaznaczeniu README, CHANGELOG, .env.example w wizardzie. Zawsze się o czymś zapomni.
 
 **Rozwiązanie:** Konfigurowalna lista plików tworzonych domyślnie (bez pytania), z możliwością wyłączenia.
 
 ```toml
-# ~/.fxg/config.toml
+# ~/.vulp/config.toml
 default_init_files = ["README.md", "CHANGELOG.md", ".env.example", ".gitignore"]
 ```
 
 ```bash
-fxg init moj-projekt                    # tworzy domyślny zestaw
-fxg init moj-projekt --no-defaults     # tworzy puste repo
-fxg init moj-projekt --files readme,license  # tylko te dwa
+vulp init moj-projekt                    # tworzy domyślny zestaw
+vulp init moj-projekt --no-defaults     # tworzy puste repo
+vulp init moj-projekt --files readme,license  # tylko te dwa
 ```
 
 Dodatkowo: **szablony zawartości pliku README** konfigurowalne w `config.toml` (`readme_template = "heartbyte-default"` już istnieje w konfigu, ale nie jest zaimplementowane).
@@ -90,15 +90,15 @@ Dodatkowo: **szablony zawartości pliku README** konfigurowalne w `config.toml` 
 
 ---
 
-### 4. `fxg sync branch cleanup` — sprzątanie zmergowanych gałęzi
+### 4. `vulp sync branch cleanup` — sprzątanie zmergowanych gałęzi
 
 **Problem:** Po miesiącach pracy masz 30 lokalnych gałęzi, z których 25 jest już zmergowanych do main. Zajmują miejsce, mylą.
 
 **Rozwiązanie:**
 ```bash
-fxg sync branch cleanup           # interaktywny wybór (TUI lista)
-fxg sync branch cleanup --all     # usuń wszystkie zmergowane bez pytania
-fxg sync branch cleanup --dry-run # pokaż co by się usunęło
+vulp sync branch cleanup           # interaktywny wybór (TUI lista)
+vulp sync branch cleanup --all     # usuń wszystkie zmergowane bez pytania
+vulp sync branch cleanup --dry-run # pokaż co by się usunęło
 ```
 
 Usuwa gałęzie które są już zmergowane do `main`/`master` — lokalnie i opcjonalnie zdalnie.
@@ -113,30 +113,30 @@ Usuwa gałęzie które są już zmergowane do `main`/`master` — lokalnie i opc
 
 ### 5. Shell completions (bash / zsh / fish / PowerShell)
 
-Wpisanie `fxg <Tab>` podpowiada:
+Wpisanie `vulp <Tab>` podpowiada:
 - subkomendy (`status`, `sync`, `init`...)
-- nazwy repo dla `fxg status <Tab>` → lista repo z workspace_root
+- nazwy repo dla `vulp status <Tab>` → lista repo z workspace_root
 - nazwy workspace dla `--workspace <Tab>`
-- aliasy kont dla `fxg auth switch <Tab>`
+- aliasy kont dla `vulp auth switch <Tab>`
 
 ```bash
-fxg completions bash   >> ~/.bashrc
-fxg completions zsh    >> ~/.zshrc
-fxg completions fish   > ~/.config/fish/completions/fxg.fish
-fxg completions powershell >> $PROFILE
+vulp completions bash   >> ~/.bashrc
+vulp completions zsh    >> ~/.zshrc
+vulp completions fish   > ~/.config/fish/completions/vulp.fish
+vulp completions powershell >> $PROFILE
 ```
 
-**Implementacja:** `clap` ma wbudowany generator completion przez crate `clap_complete`. Dynamiczne uzupełnianie nazw repo wymaga osobnego skryptu który wywołuje `fxg --list-repos` (nowa ukryta flaga).
+**Implementacja:** `clap` ma wbudowany generator completion przez crate `clap_complete`. Dynamiczne uzupełnianie nazw repo wymaga osobnego skryptu który wywołuje `vulp --list-repos` (nowa ukryta flaga).
 
 **Trudność:** niska (statyczne) / średnia (dynamiczne nazwy repo).
 
 ---
 
-### 6. `fxg status --watch` — live monitoring workspace
+### 6. `vulp status --watch` — live monitoring workspace
 
 ```bash
-fxg status --watch          # odświeża TUI co 30 sekund
-fxg status --watch --interval 10   # co 10 sekund
+vulp status --watch          # odświeża TUI co 30 sekund
+vulp status --watch --interval 10   # co 10 sekund
 ```
 
 TUI pokazuje kiedy ostatnio odświeżono. Przy zmianie statusu (np. nowy commit na serwerze) wiersz miga przez chwilę na żółto.
@@ -147,13 +147,13 @@ TUI pokazuje kiedy ostatnio odświeżono. Przy zmianie statusu (np. nowy commit 
 
 ---
 
-### 7. Szablony projektów (`fxg init --template`)
+### 7. Szablony projektów (`vulp init --template`)
 
 ```bash
-fxg init moj-projekt --template react-app
-fxg init moj-projekt --template rust-cli
-fxg init moj-projekt --template python-fastapi
-fxg init moj-projekt --template node-express
+vulp init moj-projekt --template react-app
+vulp init moj-projekt --template rust-cli
+vulp init moj-projekt --template python-fastapi
+vulp init moj-projekt --template node-express
 ```
 
 Każdy szablon tworzy kompletną strukturę katalogów i pliki startowe:
@@ -161,18 +161,18 @@ Każdy szablon tworzy kompletną strukturę katalogów i pliki startowe:
 - `rust-cli` → `src/main.rs`, `Cargo.toml` z clap+anyhow, `README.md`
 - `python-fastapi` → `main.py`, `requirements.txt`, `.env.example`, `Dockerfile`
 
-Szablony przechowywane w `~/.fxg/templates/` jako foldery — użytkownik może dodać własne.
+Szablony przechowywane w `~/.vulp/templates/` jako foldery — użytkownik może dodać własne.
 
 **Trudność:** średnia — logika tworzenia plików jest już w `init/mod.rs`, potrzebny nowy system szablonów.
 
 ---
 
-### 8. `fxg pr list` — przegląd otwartych PR
+### 8. `vulp pr list` — przegląd otwartych PR
 
 ```bash
-fxg pr list                     # wszystkie PR we wszystkich repo workspace
-fxg pr list --repo moj-projekt  # tylko jedno repo
-fxg pr list --mine              # tylko PR gdzie jesteś autorem lub reviewerem
+vulp pr list                     # wszystkie PR we wszystkich repo workspace
+vulp pr list --repo moj-projekt  # tylko jedno repo
+vulp pr list --mine              # tylko PR gdzie jesteś autorem lub reviewerem
 ```
 
 Wyświetla TUI tabelę: repo | numer | tytuł | autor | data | etykiety.
@@ -185,10 +185,10 @@ Enter na PR otwiera URL w przeglądarce.
 
 ---
 
-### 9. Globalny `.fxgignore` — repo do pominięcia
+### 9. Globalny `.vulpignore` — repo do pominięcia
 
 ```
-# ~/.fxg/ignore
+# ~/.vulp/ignore
 archived-*        # wszystkie repo zaczynające się od "archived-"
 old-monorepo      # konkretne repo po nazwie
 ```
@@ -201,12 +201,12 @@ old-monorepo      # konkretne repo po nazwie
 
 ---
 
-### 10. `fxg stats --trend` — wykres aktywności w czasie
+### 10. `vulp stats --trend` — wykres aktywności w czasie
 
 ```bash
-fxg stats --trend             # ostatnie 30 dni
-fxg stats --trend --days 90
-fxg stats --trend --repo api-backend
+vulp stats --trend             # ostatnie 30 dni
+vulp stats --trend --days 90
+vulp stats --trend --repo api-backend
 ```
 
 ASCII wykres słupkowy commitów per dzień:
@@ -230,12 +230,12 @@ May 22  ██████████████████░░░  18
 
 ### 11. VSCode Extension — automatyczne time tracking
 
-Aktualnie `fxg stats time` czyta pliki JSON z `~/.fxg/vsc-data/`. Trzeba je tworzyć ręcznie lub osobnym narzędziem.
+Aktualnie `vulp stats time` czyta pliki JSON z `~/.vulp/vsc-data/`. Trzeba je tworzyć ręcznie lub osobnym narzędziem.
 
-**Rozwiązanie:** Towarzyszące rozszerzenie VS Code które automatycznie zapisuje czas spędzony na plikach w formacie rozumianym przez `fxg`.
+**Rozwiązanie:** Towarzyszące rozszerzenie VS Code które automatycznie zapisuje czas spędzony na plikach w formacie rozumianym przez `vulp`.
 
 ```
-fxg stats time            # pokazuje automatycznie zbierane dane
+vulp stats time            # pokazuje automatycznie zbierane dane
 ```
 
 ---
@@ -257,8 +257,8 @@ Identyczny mechanizm jak audit log w innych projektach z tego zespołu.
 ### 13. AI-assisted commit messages
 
 ```bash
-fxg sync commit --ai        # generuje wiadomość z diff za pomocą AI API
-fxg sync commit --ai --edit # generuje, ale otwiera edytor do poprawki przed commitem
+vulp sync commit --ai        # generuje wiadomość z diff za pomocą AI API
+vulp sync commit --ai --edit # generuje, ale otwiera edytor do poprawki przed commitem
 ```
 
 Wysyła `git diff --staged` do API (np. Claude lub OpenAI), dostaje propozycję wiadomości w stylu conventional commits.
@@ -267,7 +267,7 @@ Wymaga klucza API w konfiguracji.
 
 ---
 
-### 14. `fxg release` multi-platform publish
+### 14. `vulp release` multi-platform publish
 
 Po stworzeniu release tagu — automatyczne wyzwolenie publishu na:
 - `crates.io` (dla Rust)
@@ -280,7 +280,7 @@ Wykrywa typ projektu przez `detect_project_type()` (już istnieje w `summary/mod
 
 ### 15. Interaktywny diff viewer
 
-W widoku szczegółowym repo (`fxg status <repo>`) — klawisz `d` otwiera inlinowy diff zmienionych plików z kolorowym podświetleniem:
+W widoku szczegółowym repo (`vulp status <repo>`) — klawisz `d` otwiera inlinowy diff zmienionych plików z kolorowym podświetleniem:
 
 ```
   M  src/components/Nav.tsx    [d] diff  [s] stage  [r] revert
@@ -297,7 +297,7 @@ W widoku szczegółowym repo (`fxg status <repo>`) — klawisz `d` otwiera inlin
 
 | # | Pomysł | Priorytet | Trudność |
 |---|---|---|---|
-| 1 | `fxg clone --mine/--contributed` | Wysoki | Średnia |
+| 1 | `vulp clone --mine/--contributed` | Wysoki | Średnia |
 | 2 | Tagi → organizacja folderów | Wysoki | Średnia |
 | 3 | Domyślna paczka plików przy init | Wysoki | Niska |
 | 4 | `branch cleanup` | Wysoki | Niska |
@@ -305,7 +305,7 @@ W widoku szczegółowym repo (`fxg status <repo>`) — klawisz `d` otwiera inlin
 | 6 | `status --watch` | Średni | Niska |
 | 7 | Szablony projektów | Średni | Średnia |
 | 8 | `pr list` | Średni | Średnia |
-| 9 | `.fxgignore` | Średni | Niska |
+| 9 | `.vulpignore` | Średni | Niska |
 | 10 | `stats --trend` | Średni | Niska |
 | 11 | VSCode extension | Przyszłość | Wysoka |
 | 12 | Webhook przy sync | Przyszłość | Niska |
