@@ -65,6 +65,8 @@ pub enum Commands {
         #[arg(long, default_value = "pull")] action: String,
         /// Commit message (required for commit-push)
         #[arg(short, long)] message: Option<String>,
+        /// Commit even when staged changes look like secrets
+        #[arg(long)] allow_secrets: bool,
     },
     /// Tag a release and publish it on the provider
     Release {

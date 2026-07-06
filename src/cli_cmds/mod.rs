@@ -30,8 +30,8 @@ pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Re
             workspace::list(cfg, json, dirty, behind, ahead, lang, project),
         Commands::Status { repo }   => workspace::status(cfg, json, &repo),
         Commands::Scan              => workspace::scan_cmd(cfg, json),
-        Commands::Sync { repos, all, project, action, message } =>
-            workspace::sync(cfg, guard, repos, all, project, &action, message),
+        Commands::Sync { repos, all, project, action, message, allow_secrets } =>
+            workspace::sync(cfg, guard, repos, all, project, &action, message, allow_secrets),
         Commands::Release { repo, tag, notes } =>
             remote::release(cfg, guard, &repo, &tag, &notes).await,
         Commands::Stats { period }  => workspace::stats(cfg, json, &period),

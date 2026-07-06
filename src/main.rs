@@ -21,6 +21,7 @@ mod profile;
 mod projects;
 mod providers;
 mod release_info;
+mod secrets;
 mod status;
 mod todos;
 mod tui;

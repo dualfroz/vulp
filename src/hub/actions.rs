@@ -42,8 +42,16 @@ pub async fn run_sync_flow(repos: &[RepoSummary], targets: &[usize], action: &st
             "pull" => run_logged(&r.path, &["pull"], crate::activity::ActivityKind::Pull, &r.name),
             "commit_push" => {
                 git_run(&r.path, &["add", "-A"]);
-                git_run(&r.path, &["commit", "-m", commit_msg]);
-                run_logged(&r.path, &["push"], crate::activity::ActivityKind::Push, &r.name);
+                let hits = crate::secrets::scan_staged(&r.path);
+                if !hits.is_empty() {
+                    println!("  ✗ SECRETS in staged changes — commit blocked:");
+                    for h in &hits { println!("      {} — {}", h.file, h.pattern); }
+                    println!("    changes unstaged; fix them (or override via CLI --allow-secrets)");
+                    crate::util::git::git_run_ok(&r.path, &["reset", "-q"]);
+                } else {
+                    git_run(&r.path, &["commit", "-m", commit_msg]);
+                    run_logged(&r.path, &["push"], crate::activity::ActivityKind::Push, &r.name);
+                }
             }
             _ => run_logged(&r.path, &["push"], crate::activity::ActivityKind::Push, &r.name),
         }

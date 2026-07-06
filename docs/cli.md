@@ -32,6 +32,9 @@ vulp <command> [--json] # non-interactive (scripts/AI)
   commands refuse to touch listed repos (exit 1) unless **`--force`** is
   passed. Matching is by display label or dir basename, case-insensitive.
   The protection check runs before `--dry-run`, so a dry run also reveals it.
+- **Secret scan**: `sync --action commit-push` refuses to commit staged
+  changes that look like credentials (see Git operations); override with
+  `--allow-secrets`.
 - **`VULP_AGENT`** (env var, any non-empty value): every activity-log entry
   written while it's set gets a `· via agent` marker in its detail, so human
   and agent actions are distinguishable in `vulp activity` and the TUI feed.
@@ -67,6 +70,12 @@ vulp release <repo> --tag v1.2.0 [--notes "..."]   # git tag + push + provider r
 
 `commit-push` requires `-m/--message`. `sync` exits 1 if any target failed
 (per-repo progress on stderr).
+
+Before every `commit-push` commit, the staged diff is scanned for secret
+shapes (GitHub/GitLab tokens, AWS access keys, Discord token assignments,
+private key blocks). A hit blocks that repo's commit and unstages the
+changes; pass `--allow-secrets` to override. The same scan guards the TUI
+sync flow. Matched values are never echoed back.
 
 ## Todos
 

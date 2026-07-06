@@ -88,10 +88,11 @@ pub fn scan_cmd(cfg: &AppConfig, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sync(
     cfg: &AppConfig, guard: super::Guard,
     repos: Vec<String>, all: bool, project: Option<String>,
-    action: &str, message: Option<String>,
+    action: &str, message: Option<String>, allow_secrets: bool,
 ) -> Result<()> {
     use crate::activity::ActivityKind;
     use crate::util::git::{git_run, git_run_ok};
@@ -150,10 +151,19 @@ pub fn sync(
             }
             "commit_push" => {
                 git_run(&r.path, &["add", "-A"]);
-                git_run(&r.path, &["commit", "-m", &msg]);
-                let ok = git_run_ok(&r.path, &["push"]);
-                if ok { log_activity(ActivityKind::Push, &r.name, format!("vulp sync (commit+push: {msg})")); }
-                ok
+                let hits = if allow_secrets { vec![] } else { crate::secrets::scan_staged(&r.path) };
+                if !hits.is_empty() {
+                    eprintln!("   SECRETS in staged changes — commit blocked:");
+                    for h in &hits { eprintln!("     {} — {}", h.file, h.pattern); }
+                    eprintln!("   changes unstaged; re-run with --allow-secrets to override");
+                    git_run_ok(&r.path, &["reset", "-q"]);
+                    false
+                } else {
+                    git_run(&r.path, &["commit", "-m", &msg]);
+                    let ok = git_run_ok(&r.path, &["push"]);
+                    if ok { log_activity(ActivityKind::Push, &r.name, format!("vulp sync (commit+push: {msg})")); }
+                    ok
+                }
             }
             "push" => {
                 let ok = git_run_ok(&r.path, &["push"]);
