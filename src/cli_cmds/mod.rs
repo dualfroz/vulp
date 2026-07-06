@@ -6,6 +6,7 @@
 //! Exit codes: 0 ok · 1 execution error · 2 bad usage (clap) ·
 //! 3 auth missing/invalid · 4 not found.
 
+mod digest;
 mod items;
 mod remote;
 mod workspace;
@@ -48,6 +49,7 @@ pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Re
             remote::init(cfg, guard, &name, private, &description).await,
         Commands::Accounts           => remote::accounts(cfg, json),
         Commands::Refresh            => remote::refresh(cfg, json).await,
+        Commands::Digest { action }  => digest::digest(cfg, guard, json, action).await,
 
         Commands::Config | Commands::Auth(_) => unreachable!("handled in app.rs"),
     }

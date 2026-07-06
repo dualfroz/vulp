@@ -161,6 +161,7 @@ pub fn tui_phase(state: &mut HubState) -> Result<(PhaseResult, Option<crate::tui
             state.poll_activity();
             state.poll_release_info();
             state.poll_codeintel();
+            state.poll_digest();
             keys_poll::poll_pull_all(state);
             keys_poll::poll_create_repo(state);
             keys_poll::poll_profile_pull(state);

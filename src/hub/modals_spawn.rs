@@ -665,6 +665,44 @@ pub fn open_action_menu(state: &mut HubState) {
     };
 }
 
+/// Builds the weekly digest in the background ([d] on Stats) and shows it
+/// as a `Modal::Info` when done — a content preview before anything is ever
+/// posted to Discord (see `crate::digest`).
+pub fn spawn_digest_preview(state: &mut HubState) {
+    use super::state::DigestMsg;
+
+    if state.digest_rx.is_some() {
+        state.status_msg = Some("Digest already loading...".into());
+        return;
+    }
+    let repos = state.repos.clone();
+    let cfg = state.cfg.clone();
+    let accounts = crate::auth::load_accounts(&cfg).unwrap_or_default();
+
+    let (tx, rx) = std::sync::mpsc::channel::<DigestMsg>();
+    state.digest_rx = Some(rx);
+    state.status_msg = Some("Building weekly digest...".into());
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() { Ok(rt) => rt, Err(_) => return };
+        rt.block_on(async move {
+            let matcher = crate::stats::OwnEmailMatcher::resolve(&cfg, &accounts);
+            let default_account = accounts.iter().find(|a| a.is_default).or(accounts.first());
+
+            let mut owners: std::collections::HashSet<String> =
+                repos.iter().filter_map(|r| r.owner.clone()).collect();
+            if let Some(acc) = default_account { owners.insert(acc.username.clone()); }
+            let scope = owners.iter().map(|o| format!("user:{o}")).collect::<Vec<_>>().join(" ");
+
+            let provider = default_account.and_then(|acc| crate::providers::make_provider(acc).ok());
+            let d = crate::digest::build(&repos, &matcher, provider.as_deref(), &scope).await;
+            let lines: Vec<String> = crate::digest::render_plaintext(&d)
+                .lines().map(|s| s.to_string()).collect();
+            let _ = tx.send(DigestMsg { lines });
+        });
+    });
+}
+
 /// Runs the full API refresh ([R]) in the background: per-repo metadata,
 /// open PR/issue lists, and workspace-wide merged/closed counters. Progress
 /// streams through `state.refresh_rx` (polled by `keys_poll::poll_refresh`),
@@ -690,6 +728,11 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 .unwrap_or_else(|| r.name.clone());
             (r.name.clone(), r.owner.clone(), basename, r.branch.clone())
         })
+        .collect();
+    // For the Tier-B local measurements (release cadence, repo size) below —
+    // those need the on-disk path, not the provider slug.
+    let repo_paths: Vec<(String, std::path::PathBuf)> = state.repos.iter()
+        .map(|r| (r.name.clone(), r.path.clone()))
         .collect();
 
     let (tx, rx) = std::sync::mpsc::channel::<RefreshMsg>();
@@ -790,6 +833,17 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 let ciss   = provider.count_search(&format!("is:issue is:closed {}", scope)).await.unwrap_or(0);
                 closed_counts = Some((merged, closed, ciss));
             }
+
+            // Tier-B local measurements (release cadence, repo size) — no
+            // network, cheap (~0.2s/50 repos measured), so a plain sequential
+            // pass is fine. Only run during `[R]`, never on tab entry.
+            let _ = tx.send(RefreshMsg::Progress("Measuring release cadence + repo size...".into()));
+            let mut stats_cache = crate::stats::cache::load();
+            for (name, path) in &repo_paths {
+                let size = crate::stats::size::repo_size(path);
+                stats_cache.record_size(name, size.git_kb, size.tree_kb);
+            }
+            let _ = crate::stats::cache::save(&stats_cache);
 
             let _ = tx.send(RefreshMsg::Done { metas, prs, issues, closed_counts });
         });

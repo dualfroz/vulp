@@ -378,6 +378,15 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     }
     let _ = crate::cache::save(&cache);
 
+    // Tier-B local measurement (repo size trend) — no network, cheap, only
+    // ever recorded during a refresh (never on a plain read like `vulp status`).
+    let mut stats_cache = crate::stats::cache::load();
+    for r in &repos {
+        let size = crate::stats::size::repo_size(&r.path);
+        stats_cache.record_size(&r.name, size.git_kb, size.tree_kb);
+    }
+    let _ = crate::stats::cache::save(&stats_cache);
+
     if json {
         #[derive(serde::Serialize)]
         struct Out { repos_refreshed: usize, open_prs: usize, open_issues: usize }

@@ -120,6 +120,8 @@ pub struct HubState {
     pub profile_pull_rx:     Option<std::sync::mpsc::Receiver<ProfilePullMsg>>,
     // Code intelligence background receiver (tree-sitter parsing — CPU-bound, plain thread)
     pub codeintel_rx:        Option<std::sync::mpsc::Receiver<CodeIntelMsg>>,
+    // Weekly digest preview background receiver ([d] on Stats)
+    pub digest_rx:           Option<std::sync::mpsc::Receiver<DigestMsg>>,
     // Full app config, needed by background threads that create/push repos via providers
     pub cfg:                 crate::config::AppConfig,
 }
@@ -479,6 +481,24 @@ impl HubState {
                     self.modal = Modal::RenamePreview { title, lines, scroll: 0, plan };
                 }
             }
+        }
+    }
+
+    /// Check if the background digest-preview job ([d] on Stats) finished,
+    /// and if so, show it as a `Modal::Info`.
+    pub fn poll_digest(&mut self) {
+        let done = match &self.digest_rx {
+            None     => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(msg)                                          => Some(msg),
+                Err(std::sync::mpsc::TryRecvError::Empty)        => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            },
+        };
+        if let Some(msg) = done {
+            self.digest_rx  = None;
+            self.status_msg = None;
+            self.modal = Modal::Info { title: "Weekly digest (preview — nothing sent)".into(), lines: msg.lines, scroll: 0 };
         }
     }
 

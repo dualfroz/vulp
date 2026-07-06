@@ -133,6 +133,22 @@ pub enum Commands {
     Accounts,
     /// Fetch metadata/PRs/issues + merged/closed counters from provider APIs
     Refresh,
+    /// Weekly digest of your own activity (commits/releases/PRs/issues/todos)
+    Digest {
+        #[command(subcommand)]
+        action: Option<DigestCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DigestCmd {
+    /// Post this week's digest to a saved destination
+    Send {
+        /// Currently only "discord"
+        target: String,
+    },
+    /// Store/replace the Discord webhook URL used by `digest send discord`
+    Webhook { url: String },
 }
 
 #[derive(Subcommand)]

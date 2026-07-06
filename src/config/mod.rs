@@ -48,6 +48,11 @@ pub struct AppConfig {
     /// CLI commands refuse to touch unless `--force` is passed.
     #[serde(default)]
     pub protected_repos:     Vec<String>,
+    /// Author emails counted as "you" for streak/heatmap/digest stats.
+    /// Empty = fall back to `git config user.email`, then `email`. GitHub's
+    /// no-reply address for each configured account is always matched too.
+    #[serde(default)]
+    pub stats_author_emails: Vec<String>,
 }
 
 fn default_license_kind() -> String { "mit".into() }
@@ -87,6 +92,7 @@ impl Default for AppConfig {
             license_holder:     String::new(),
             default_license:    default_license_kind(),
             protected_repos:    vec![],
+            stats_author_emails: vec![],
         }
     }
 }
@@ -113,6 +119,7 @@ impl AppConfig {
             ("license_holder",     self.license_holder.clone()),
             ("default_license",    self.default_license.clone()),
             ("protected_repos",    self.protected_repos.join(", ")),
+            ("stats_author_emails", self.stats_author_emails.join(", ")),
         ]
     }
 
@@ -138,6 +145,13 @@ impl AppConfig {
             "default_license"    => self.default_license    = value,
             "protected_repos"    => {
                 self.protected_repos = value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "stats_author_emails" => {
+                self.stats_author_emails = value
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())

@@ -36,6 +36,10 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 - **Secret scan**: `sync --action commit-push` refuses to commit staged
   changes that look like credentials (see Git operations); override with
   `--allow-secrets`.
+- **Discord webhook secret**: `vulp digest webhook <url>` stores the URL in
+  `~/.vulp/.tokens` (mode 0600) the same way provider tokens are stored —
+  never in `config.toml`, never printed back, never logged. Whoever has the
+  URL can post to (and edit/delete messages in) that channel.
 - **`VULP_AGENT`** (env var, any non-empty value): every activity-log entry
   written while it's set gets a `· via agent` marker in its detail, so human
   and agent actions are distinguishable in `vulp activity` and the TUI feed.
@@ -138,6 +142,24 @@ overwrites an existing license (reported as skipped) and never commits —
 review and commit the file yourself. Defaults come from config:
 `default_license` (mit) and `license_holder` (falls back to
 `git config user.name`, then the account username).
+
+## Weekly digest
+
+```
+vulp digest [--json]                    # build + print this week's digest, archive to ~/.vulp/digests/
+vulp digest send discord                # also POST it to the saved Discord webhook
+vulp digest webhook <url>               # store/replace the webhook URL (secret — see Guardrails)
+```
+
+The digest counts only **your own** commits — filtered by `stats_author_emails`
+(config; falls back to `git config user.email`) plus each configured
+account's GitHub no-reply address — not every commit in the workspace
+(most repos here are 90%+ upstream/fork history). It reports: own commits
+this week vs last week, active days, current streak, top 3 repos by own
+commits, local tags created this week, PR/issue open+merged/closed counts
+(provider search API, needs an account), and todos added/done. Every build
+is archived to `~/.vulp/digests/<ISO-week>.md` regardless of `send`.
+`digest send discord` respects global `--dry-run`.
 
 ## Recipes for AI agents
 

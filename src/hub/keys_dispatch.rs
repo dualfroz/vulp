@@ -280,6 +280,9 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
             state.global_stats_period = state.global_stats_period.prev();
             super::keys::maybe_load_global_stats(state);
         }
+        KeyCode::Char('d') if state.tab == Tab::Stats => {
+            super::modals_spawn::spawn_digest_preview(state);
+        }
         KeyCode::Char('v') if state.tab == Tab::Overview => {
             if let Some(Ok(latest)) = &state.latest_release {
                 if !latest.html_url.is_empty() {

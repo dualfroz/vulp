@@ -26,7 +26,7 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
     let mut left_lines: Vec<Line> = vec![];
 
     left_lines.push(Line::from(Span::styled(
-        format!("  Global Statistics  [7:{}]  [p] change period", state.global_stats_period.label()),
+        format!("  Global Statistics  [7:{}]  [p] change period  [d] weekly digest preview", state.global_stats_period.label()),
         yel,
     )));
     left_lines.push(Line::from(Span::styled("  ─────────────────────────────────────────────────────────", dim)));

@@ -76,3 +76,9 @@ pub enum CodeIntelMsg {
     /// which requires an explicit Enter/y before `apply_rename_plan` ever runs.
     Preview { title: String, lines: Vec<String>, plan: crate::codeintel::RenamePlan },
 }
+
+/// Result of building the weekly digest in the background (`[d]` on Stats)
+/// — a content preview before anything is ever posted to Discord.
+pub struct DigestMsg {
+    pub lines: Vec<String>,
+}

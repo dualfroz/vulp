@@ -208,10 +208,12 @@ pub fn list_branches(path: &std::path::Path) -> Vec<BranchEntry> {
 
 // ── contributors ─────────────────────────────────────────────────────────────
 
-/// Contributors by commit count across all branches (`git shortlog -sn --all`).
+/// Contributors by commit count across local branches (`git shortlog -sn
+/// --branches`). Deliberately not `--all`: that also counts remote-tracking
+/// refs, so after a fetch every contributor gets double-counted.
 pub fn list_contributors(path: &std::path::Path) -> Vec<ContribEntry> {
     let out = std::process::Command::new("git")
-        .arg("-C").arg(path).args(["shortlog", "-sn", "--all"])
+        .arg("-C").arg(path).args(["shortlog", "-sn", "--branches"])
         .output()
         .unwrap_or_else(|_| std::process::Output {
             status: std::process::ExitStatus::default(), stdout: vec![], stderr: vec![]

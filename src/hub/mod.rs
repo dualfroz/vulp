@@ -145,6 +145,7 @@ pub async fn run_overview_tui(
         create_repo_rx:      None,
         profile_pull_rx:     None,
         codeintel_rx:        None,
+        digest_rx:           None,
         latest_release:      None,
         current_release:     None,
         account_since:       HashMap::new(),
