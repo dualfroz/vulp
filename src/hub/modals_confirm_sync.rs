@@ -6,7 +6,7 @@ use super::modals_spawn::{
     spawn_convention_preview, spawn_create_issue, spawn_create_pr, spawn_find_usages,
     spawn_list_functions, spawn_repo_stats, spawn_rename_preview,
 };
-use super::state::{HubState, MenuAction, Modal, PhaseResult, SelectTag, SortMode, TextTag};
+use super::state::{ConfirmTag, HubState, MenuAction, Modal, PhaseResult, SelectTag, SortMode, TextTag};
 
 /// Handles one step of a sort/filter, repo-creation, sync, Quick Actions, or
 /// code-intel modal chain. Returns `None` once `modal` has been consumed by
@@ -157,6 +157,25 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                     }
                 }
                 Some(MenuAction::CodeIntelPicker) => super::modals_spawn::open_codeintel_picker(state),
+                Some(MenuAction::AddLicense) => {
+                    let targets: Vec<usize> = state.action_targets().into_iter()
+                        .filter(|&ri| !state.repos[ri].has_license)
+                        .collect();
+                    if targets.is_empty() {
+                        state.status_msg = Some("All targeted repos already have a LICENSE".into());
+                    } else {
+                        let cursor = match crate::license::default_kind(&state.cfg) {
+                            crate::license::LicenseKind::Apache2 => 1,
+                            crate::license::LicenseKind::Mit     => 0,
+                        };
+                        state.modal = Modal::Select {
+                            title: format!("Add LICENSE — {} repo{}", targets.len(), if targets.len() == 1 { "" } else { "s" }),
+                            options: vec!["MIT".into(), "Apache-2.0".into()],
+                            cursor,
+                            tag: SelectTag::LicenseKind { targets },
+                        };
+                    }
+                }
                 Some(MenuAction::StashSave(ri)) | Some(MenuAction::StashPop(ri)) => {
                     let ri = *ri;
                     let repo = state.repos.get(ri)?;
@@ -184,6 +203,61 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 }
                 None => {}
             }
+            None
+        }
+
+        // ── Add LICENSE ([m] action, bulk over action_targets) ────────────────
+        Modal::Select { cursor, tag: SelectTag::LicenseKind { targets }, .. } => {
+            let kind = if cursor == 1 { crate::license::LicenseKind::Apache2 } else { crate::license::LicenseKind::Mit };
+            let names: Vec<&str> = targets.iter().take(6)
+                .filter_map(|&ri| state.repos.get(ri).map(|r| r.name.as_str()))
+                .collect();
+            let more = targets.len().saturating_sub(names.len());
+            let list = if more > 0 {
+                format!("{} +{} more", names.join(", "), more)
+            } else {
+                names.join(", ")
+            };
+            state.modal = Modal::Confirm {
+                message: format!(
+                    "Write {} LICENSE to {} repo{}? ({}) — not committed",
+                    kind.label(), targets.len(), if targets.len() == 1 { "" } else { "s" }, list,
+                ),
+                tag: ConfirmTag::WriteLicense { kind, targets },
+            };
+            None
+        }
+        Modal::Confirm { tag: ConfirmTag::WriteLicense { kind, targets }, .. } => {
+            let holder = crate::license::holder_for(&state.cfg);
+            let year   = chrono::Datelike::year(&chrono::Utc::now());
+            let (mut written, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+            for ri in targets {
+                let Some(repo) = state.repos.get(ri) else { continue };
+                let (path, name) = (repo.path.clone(), repo.name.clone());
+                match crate::license::write_license(&path, kind, &holder, year) {
+                    Ok(crate::license::WriteOutcome::Written) => {
+                        written += 1;
+                        state.repos[ri].has_license = true;
+                        // New untracked LICENSE file — the repo is dirty now.
+                        state.repos[ri].is_dirty = true;
+                        crate::activity::log(&crate::activity::ActivityEntry {
+                            ts:     chrono::Utc::now().timestamp(),
+                            kind:   crate::activity::ActivityKind::License,
+                            repo:   name,
+                            detail: format!("{} ({})", kind.label(), holder),
+                        });
+                    }
+                    Ok(crate::license::WriteOutcome::AlreadyLicensed) => {
+                        skipped += 1;
+                        state.repos[ri].has_license = true;
+                    }
+                    Err(_) => failed += 1,
+                }
+            }
+            let mut msg = format!("LICENSE ({}): {} written", kind.label(), written);
+            if skipped > 0 { msg.push_str(&format!(", {} already licensed", skipped)); }
+            if failed  > 0 { msg.push_str(&format!(", {} FAILED", failed)); }
+            state.status_msg = Some(msg);
             None
         }
 

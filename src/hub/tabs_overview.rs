@@ -27,6 +27,7 @@ fn kind_color(kind: crate::activity::ActivityKind) -> Color {
         K::Todo    => Color::Yellow,
         K::Pr      => Color::Cyan,
         K::Issue   => Color::Yellow,
+        K::License => Color::Magenta,
     }
 }
 

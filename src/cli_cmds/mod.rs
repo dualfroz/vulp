@@ -34,7 +34,7 @@ pub async fn run(cmd: Commands, json: bool, cfg: &AppConfig) -> Result<()> {
 
         Commands::Pr { action }      => remote::pr(cfg, json, action).await,
         Commands::Issue { action }   => remote::issue(cfg, json, action).await,
-        Commands::Repo { action }    => remote::repo_cmd(cfg, action).await,
+        Commands::Repo { action }    => remote::repo_cmd(cfg, json, action).await,
         Commands::Init { name, private, description } =>
             remote::init(cfg, &name, private, &description).await,
         Commands::Accounts           => remote::accounts(cfg, json),

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 /// The kind of action recorded in one activity log entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ActivityKind { Commit, Push, Pull, Release, NewRepo, Todo, Pr, Issue }
+pub enum ActivityKind { Commit, Push, Pull, Release, NewRepo, Todo, Pr, Issue, License }
 
 impl ActivityKind {
     /// Display label shown in the Activity tab's table.
@@ -22,6 +22,7 @@ impl ActivityKind {
             Self::Todo    => "todo",
             Self::Pr      => "pr",
             Self::Issue   => "issue",
+            Self::License => "license",
         }
     }
 
@@ -30,7 +31,7 @@ impl ActivityKind {
     pub fn cycle() -> &'static [ActivityKind] {
         &[
             Self::Commit, Self::Push, Self::Pull, Self::Release,
-            Self::NewRepo, Self::Todo, Self::Pr, Self::Issue,
+            Self::NewRepo, Self::Todo, Self::Pr, Self::Issue, Self::License,
         ]
     }
 }

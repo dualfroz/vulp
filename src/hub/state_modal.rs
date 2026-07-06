@@ -81,6 +81,8 @@ pub enum MenuAction {
     /// `git stash` / `git stash pop` on the repo under the cursor.
     StashSave(usize),
     StashPop(usize),
+    /// Write a LICENSE file into every `action_targets()` repo missing one.
+    AddLicense,
 }
 
 /// What a `Modal::Select` list is *for*, mirroring `TextTag`.
@@ -121,6 +123,8 @@ pub enum SelectTag {
     ProfileScope(ProfileScopeAction),
     // Contextual `[m]` action menu — options paired 1:1 with the actions
     ActionMenu(Vec<MenuAction>),
+    // add-LICENSE flow: MIT vs Apache-2.0, for the captured target repos
+    LicenseKind { targets: Vec<usize> },
     // Code intelligence (Stats tab, [m])
     CodeIntelRepoPick,
     CodeIntelAction { repo: std::path::PathBuf, name: String },
@@ -154,6 +158,8 @@ pub enum ConfirmTag {
     DeleteTodo(usize),
     RemoveGitAll,
     DeleteTemplate(usize),
+    // write a LICENSE (of the chosen kind) into each target repo
+    WriteLicense { kind: crate::license::LicenseKind, targets: Vec<usize> },
 }
 
 /// Outcome of one key event while a modal is open, returned by

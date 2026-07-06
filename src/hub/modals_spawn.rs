@@ -609,6 +609,12 @@ pub fn open_action_menu(state: &mut HubState) {
         entries.push(entry("Delete project",         "Del",   kc(KeyCode::Delete)));
     }
 
+    // Bulk-aware (multi-select > cursor repo > project): only shown when at
+    // least one targeted repo is missing a license file.
+    if state.action_targets().iter().any(|&ri| !state.repos[ri].has_license) {
+        entries.push(entry("Add LICENSE (MIT/Apache)", "", MenuAction::AddLicense));
+    }
+
     match state.tab {
         Tab::Todos => {
             entries.push(entry("Cycle todo status",   "Space", kc(KeyCode::Char(' '))));

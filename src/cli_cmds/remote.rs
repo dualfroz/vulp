@@ -103,7 +103,7 @@ pub async fn release(cfg: &AppConfig, repo: &str, tag: &str, notes: &str) -> Res
     Ok(())
 }
 
-pub async fn repo_cmd(cfg: &AppConfig, cmd: RepoCmd) -> Result<()> {
+pub async fn repo_cmd(cfg: &AppConfig, json: bool, cmd: RepoCmd) -> Result<()> {
     match cmd {
         RepoCmd::Url { repo } => {
             let r = find_repo(cfg, &repo);
@@ -170,7 +170,74 @@ pub async fn repo_cmd(cfg: &AppConfig, cmd: RepoCmd) -> Result<()> {
                 Err(e) => die(1, &format!("invite failed: {e:#}")),
             }
         }
+        RepoCmd::License { repos, all, kind, holder } => {
+            license(cfg, json, repos, all, kind, holder)
+        }
     }
+}
+
+/// `vulp repo license` — writes a LICENSE into each target repo that lacks
+/// one. Explicit names that already have a license are reported as skipped,
+/// not errors; `--all` targets every unlicensed workspace repo.
+fn license(cfg: &AppConfig, json: bool, repos: Vec<String>, all: bool,
+           kind: Option<String>, holder: Option<String>) -> Result<()> {
+    use crate::license::{LicenseKind, WriteOutcome};
+
+    if repos.is_empty() && !all {
+        die(2, "pass repo names or --all");
+    }
+    let kind = match kind {
+        Some(s) => match LicenseKind::parse(&s) {
+            Some(k) => k,
+            None    => die(2, "kind must be mit | apache-2.0"),
+        },
+        None => crate::license::default_kind(cfg),
+    };
+    let holder = holder.unwrap_or_else(|| crate::license::holder_for(cfg));
+    if holder.trim().is_empty() {
+        die(2, "no copyright holder — pass --holder or set license_holder/username in config");
+    }
+
+    let workspace = super::scan_repos(cfg);
+    let targets: Vec<&crate::status::RepoSummary> = if all {
+        workspace.iter().filter(|r| !r.has_license).collect()
+    } else {
+        repos.iter().map(|name| {
+            let needle = name.to_lowercase();
+            workspace.iter().find(|r| {
+                r.name.to_lowercase() == needle
+                    || r.path.file_name().map(|b| b.to_string_lossy().to_lowercase() == needle).unwrap_or(false)
+            }).unwrap_or_else(|| die(4, &format!("repo '{name}' not found in {}", cfg.workspace_root.display())))
+        }).collect()
+    };
+
+    let year = chrono::Datelike::year(&chrono::Utc::now());
+    let (mut written, mut skipped, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+    for r in targets {
+        match crate::license::write_license(&r.path, kind, &holder, year) {
+            Ok(WriteOutcome::Written) => {
+                log_activity(ActivityKind::License, &r.name, format!("{} ({})", kind.label(), holder));
+                written.push(r.name.clone());
+            }
+            Ok(WriteOutcome::AlreadyLicensed) => skipped.push(r.name.clone()),
+            Err(e) => {
+                eprintln!("error: writing LICENSE to {} failed: {e:#}", r.name);
+                failed.push(r.name.clone());
+            }
+        }
+    }
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Out { kind: String, holder: String, written: Vec<String>, skipped: Vec<String>, failed: Vec<String> }
+        out_json(&Out { kind: kind.label().into(), holder, written, skipped, failed: failed.clone() });
+    } else {
+        for n in &written { println!("LICENSE ({}) written to {n}", kind.label()); }
+        for n in &skipped { println!("skipped {n} (already has a license)"); }
+        if written.is_empty() && skipped.is_empty() { println!("nothing to do"); }
+    }
+    if !failed.is_empty() { std::process::exit(1); }
+    Ok(())
 }
 
 pub async fn init(cfg: &AppConfig, name: &str, private: bool, description: &str) -> Result<()> {

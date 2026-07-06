@@ -13,7 +13,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 
 - **`--json`** (global flag): machine-readable JSON on stdout. Available on:
   `list`, `status`, `scan`, `stats`, `activity`, `todo list`, `pr list`,
-  `issue list`, `project list`, `accounts`, `refresh`.
+  `issue list`, `project list`, `accounts`, `refresh`, `repo license`.
 - **No prompts, ever.** Missing input = error + non-zero exit.
 - **stdout** = results only. **stderr** = progress and errors.
 - **Exit codes:** `0` ok · `1` execution error · `2` bad usage ·
@@ -30,7 +30,7 @@ vulp scan                                # repo count + dirty/behind/ahead summa
 vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME]
 vulp status <repo>                       # branch, dirty, ahead/behind, last commit...
 vulp stats [--period 1d|7d|30d|90d|1y|all]   # commits per repo in period
-vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|commit]
+vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|commit|license]
 ```
 
 `vulp list --json` returns an array of repo objects:
@@ -96,7 +96,15 @@ vulp repo label <repo> "Display Name"   # empty name clears the label
 vulp repo bookmark <repo>               # toggle
 vulp repo pin <repo>                    # toggle
 vulp repo collab <repo> <user> [--role pull|push|admin]
+vulp repo license <repo>... [--kind mit|apache-2.0] [--holder NAME]
+vulp repo license --all                 # every repo missing a license
 ```
+
+`repo license` writes a `LICENSE` file into each target repo. It never
+overwrites an existing license (reported as skipped) and never commits —
+review and commit the file yourself. Defaults come from config:
+`default_license` (mit) and `license_holder` (falls back to
+`git config user.name`, then the account username).
 
 ## Recipes for AI agents
 

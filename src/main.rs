@@ -16,6 +16,7 @@ mod detail;
 mod hub;
 mod labels;
 mod legacy;
+mod license;
 mod profile;
 mod projects;
 mod providers;

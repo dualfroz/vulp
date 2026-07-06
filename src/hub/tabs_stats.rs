@@ -185,6 +185,7 @@ pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {
             crate::activity::ActivityKind::Todo     => Style::default().fg(Color::Yellow),
             crate::activity::ActivityKind::Pr       => Style::default().fg(Color::Cyan),
             crate::activity::ActivityKind::Issue    => Style::default().fg(Color::Yellow),
+            crate::activity::ActivityKind::License  => Style::default().fg(Color::Magenta),
         };
         let detail = e.detail.chars().take(detail_w).collect::<String>();
         Row::new(vec![

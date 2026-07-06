@@ -37,7 +37,16 @@ pub struct AppConfig {
     /// Count lines-of-code during workspace scan (slow for large repos; off by default).
     #[serde(default)]
     pub show_locs:           bool,
+    /// Copyright holder written into generated LICENSE files
+    /// (empty = fall back to `git config user.name`, then `username`).
+    #[serde(default)]
+    pub license_holder:      String,
+    /// Default template for the add-LICENSE action: "mit" or "apache-2.0".
+    #[serde(default = "default_license_kind")]
+    pub default_license:     String,
 }
+
+fn default_license_kind() -> String { "mit".into() }
 
 /// Picks the first available clipboard tool on PATH as the default
 /// `clipboard_cmd`, so a fresh install works without manual configuration
@@ -71,6 +80,8 @@ impl Default for AppConfig {
             workspace_groups:   vec![],
             clipboard_cmd:      default_clipboard_cmd(),
             show_locs:          false,
+            license_holder:     String::new(),
+            default_license:    default_license_kind(),
         }
     }
 }
@@ -94,6 +105,8 @@ impl AppConfig {
             ("timezone",           self.timezone.clone()),
             ("vsc_data_dir",       self.vsc_data_dir.to_string_lossy().into()),
             ("workspace_groups",   self.workspace_groups.join(", ")),
+            ("license_holder",     self.license_holder.clone()),
+            ("default_license",    self.default_license.clone()),
         ]
     }
 
@@ -115,6 +128,8 @@ impl AppConfig {
             "share_stats"        => self.share_stats        = value == "true",
             "timezone"           => self.timezone           = value,
             "vsc_data_dir"       => self.vsc_data_dir       = PathBuf::from(&value),
+            "license_holder"     => self.license_holder     = value,
+            "default_license"    => self.default_license    = value,
             "workspace_groups"   => {
                 self.workspace_groups = value
                     .split(',')

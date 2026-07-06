@@ -208,6 +208,17 @@ pub enum RepoCmd {
         /// pull | push | admin
         #[arg(long, default_value = "push")] role: String,
     },
+    /// Write a LICENSE file into repos that lack one (never overwrites, never commits)
+    License {
+        /// Repo names (omit with --all)
+        repos: Vec<String>,
+        /// Every workspace repo missing a license
+        #[arg(long)] all: bool,
+        /// mit | apache-2.0 (default: config `default_license`)
+        #[arg(long)] kind: Option<String>,
+        /// Copyright holder (default: config `license_holder`, then git user.name)
+        #[arg(long)] holder: Option<String>,
+    },
 }
 
 #[derive(Args)]
