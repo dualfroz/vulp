@@ -179,6 +179,120 @@ pub fn sync(
     Ok(())
 }
 
+/// `vulp brief` — one-shot workspace or per-repo picture for scripts and AI
+/// agents: local git state plus todos and the cached PR/issue lists (run
+/// `vulp refresh` first when freshness matters). Read-only.
+pub fn brief(cfg: &AppConfig, json: bool, repo: Option<String>) -> Result<()> {
+    use crate::todos::TodoStatus;
+
+    let cache = crate::cache::load();
+
+    if let Some(name) = repo {
+        let r = find_repo(cfg, &name);
+        let basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
+            .unwrap_or_else(|| r.name.clone());
+        let matches_repo = |candidate: &str| {
+            candidate.eq_ignore_ascii_case(&r.name) || candidate.eq_ignore_ascii_case(&basename)
+        };
+
+        let commits: Vec<(String, String)> = crate::status::repo_recent_commits(&r.path, 10);
+        let todos: Vec<crate::todos::Todo> = crate::todos::load().into_iter()
+            .filter(|t| t.status == TodoStatus::Open || t.status == TodoStatus::InProgress)
+            .filter(|t| t.repo.as_deref().map(matches_repo).unwrap_or(false))
+            .collect();
+        let prs: Vec<crate::providers::PrDetail> = cache.all_prs().into_iter()
+            .filter(|p| matches_repo(&p.repo)).cloned().collect();
+        let issues: Vec<crate::providers::IssueDetail> = cache.all_issues().into_iter()
+            .filter(|i| matches_repo(&i.repo)).cloned().collect();
+
+        if json {
+            #[derive(serde::Serialize)]
+            struct Commit { age: String, message: String }
+            #[derive(serde::Serialize)]
+            struct Out {
+                repo:           crate::status::RepoSummary,
+                recent_commits: Vec<Commit>,
+                todos:          Vec<crate::todos::Todo>,
+                open_prs:       Vec<crate::providers::PrDetail>,
+                open_issues:    Vec<crate::providers::IssueDetail>,
+            }
+            out_json(&Out {
+                repo: r,
+                recent_commits: commits.into_iter().map(|(age, message)| Commit { age, message }).collect(),
+                todos, open_prs: prs, open_issues: issues,
+            });
+        } else {
+            println!("{} · {} · {}{}{}", r.name, r.branch,
+                if r.is_dirty { "dirty " } else { "clean " },
+                if r.ahead  > 0 { format!("↑{} ", r.ahead)  } else { String::new() },
+                if r.behind > 0 { format!("↓{} ", r.behind) } else { String::new() });
+            println!("\nrecent commits:");
+            for (age, msg) in &commits { println!("  {:<9} {}", age, msg); }
+            if !todos.is_empty() {
+                println!("\ntodos:");
+                for t in &todos { println!("  #{:<4} [{}] {}", t.id, t.status.label(), t.title); }
+            }
+            if !prs.is_empty() {
+                println!("\nopen PRs (cached):");
+                for p in &prs { println!("  #{:<5} {} ({} → {})", p.number, p.title, p.head_branch, p.base_branch); }
+            }
+            if !issues.is_empty() {
+                println!("\nopen issues (cached):");
+                for i in &issues { println!("  #{:<5} {}", i.number, i.title); }
+            }
+        }
+        return Ok(());
+    }
+
+    // ── workspace-wide brief ──────────────────────────────────────────────
+    let repos = scan_repos(cfg);
+    let dirty  = repos.iter().filter(|r| r.is_dirty).count();
+    let behind = repos.iter().filter(|r| r.behind > 0).count();
+    let ahead  = repos.iter().filter(|r| r.ahead > 0).count();
+    let unlicensed = repos.iter().filter(|r| !r.has_license).count();
+    let needs_attention: Vec<&crate::status::RepoSummary> = repos.iter()
+        .filter(|r| r.is_dirty || r.ahead > 0 || r.behind > 0)
+        .collect();
+    let todos: Vec<crate::todos::Todo> = crate::todos::load().into_iter()
+        .filter(|t| t.status == TodoStatus::Open || t.status == TodoStatus::InProgress)
+        .collect();
+    let prs: Vec<&crate::providers::PrDetail> = cache.all_prs();
+    let issues: Vec<&crate::providers::IssueDetail> = cache.all_issues();
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Summary { total: usize, dirty: usize, ahead: usize, behind: usize, missing_license: usize }
+        #[derive(serde::Serialize)]
+        struct Out<'a> {
+            summary:         Summary,
+            needs_attention: Vec<&'a crate::status::RepoSummary>,
+            todos:           &'a [crate::todos::Todo],
+            open_prs:        &'a [&'a crate::providers::PrDetail],
+            open_issues:     &'a [&'a crate::providers::IssueDetail],
+        }
+        out_json(&Out {
+            summary: Summary { total: repos.len(), dirty, ahead, behind, missing_license: unlicensed },
+            needs_attention, todos: &todos, open_prs: &prs, open_issues: &issues,
+        });
+    } else {
+        println!("{} repos · {} dirty · {} ahead · {} behind · {} without license",
+                 repos.len(), dirty, ahead, behind, unlicensed);
+        if !needs_attention.is_empty() {
+            println!("\nneeds attention:");
+            for r in &needs_attention {
+                let mut flags = String::new();
+                if r.is_dirty   { flags.push('⚠'); }
+                if r.ahead > 0  { flags.push('↑'); }
+                if r.behind > 0 { flags.push('↓'); }
+                println!("  {:<28} {:<12} {}", r.name, r.branch, flags);
+            }
+        }
+        println!("\ntodos: {} open/in-progress · PRs (cached): {} · issues (cached): {}",
+                 todos.len(), prs.len(), issues.len());
+    }
+    Ok(())
+}
+
 pub fn stats(cfg: &AppConfig, json: bool, period: &str) -> Result<()> {
     use crate::detail::StatsPeriod;
     let p = match period {

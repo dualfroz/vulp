@@ -12,8 +12,9 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 ## Contract
 
 - **`--json`** (global flag): machine-readable JSON on stdout. Available on:
-  `list`, `status`, `scan`, `stats`, `activity`, `todo list`, `pr list`,
-  `issue list`, `project list`, `accounts`, `refresh`, `repo license`.
+  `list`, `status`, `scan`, `brief`, `stats`, `activity`, `todo list`,
+  `pr list`, `issue list`, `project list`, `accounts`, `refresh`,
+  `repo license`.
 - **No prompts, ever.** Missing input = error + non-zero exit.
 - **stdout** = results only. **stderr** = progress and errors.
 - **Exit codes:** `0` ok · `1` execution error · `2` bad usage ·
@@ -44,6 +45,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 
 ```
 vulp scan                                # repo count + dirty/behind/ahead summary
+vulp brief [repo]                        # one-shot picture: state + commits + todos + PR/issues
 vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME]
 vulp status <repo>                       # branch, dirty, ahead/behind, last commit...
 vulp stats [--period 1d|7d|30d|90d|1y|all]   # commits per repo in period
@@ -132,7 +134,13 @@ review and commit the file yourself. Defaults come from config:
 ## Recipes for AI agents
 
 ```bash
-# What needs attention right now?
+# What needs attention right now? (state + todos + cached PRs/issues in one shot)
+vulp brief --json
+
+# Everything about one repo before working on it
+vulp brief client-panel --json
+
+# Only the dirty repos
 vulp list --dirty --json
 
 # Commit and push everything in one project

@@ -111,6 +111,11 @@ pub enum Commands {
         #[arg(long, default_value = "")] description: String,
     },
 
+    /// One-shot picture: repo state + commits + todos + PRs/issues (from cache)
+    Brief {
+        /// Repo name (omit for the whole workspace)
+        repo: Option<String>,
+    },
     /// Workspace-wide commit statistics
     Stats {
         /// 1d | 7d | 30d | 90d | 1y | all
