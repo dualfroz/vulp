@@ -14,18 +14,26 @@ use crate::cli::Commands;
 use crate::config::AppConfig;
 use anyhow::Result;
 
+/// Global guardrail flags (`--dry-run`, `--force`) threaded into the
+/// mutating commands; read commands ignore them.
+#[derive(Clone, Copy)]
+pub(crate) struct Guard {
+    pub dry_run: bool,
+    pub force:   bool,
+}
+
 /// Dispatches one parsed subcommand. Only called for commands that aren't
 /// `Config`/`Auth`/the bare TUI (those keep their existing paths in `app.rs`).
-pub async fn run(cmd: Commands, json: bool, cfg: &AppConfig) -> Result<()> {
+pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Result<()> {
     match cmd {
         Commands::List { dirty, behind, ahead, lang, project } =>
             workspace::list(cfg, json, dirty, behind, ahead, lang, project),
         Commands::Status { repo }   => workspace::status(cfg, json, &repo),
         Commands::Scan              => workspace::scan_cmd(cfg, json),
         Commands::Sync { repos, all, project, action, message } =>
-            workspace::sync(cfg, repos, all, project, &action, message),
+            workspace::sync(cfg, guard, repos, all, project, &action, message),
         Commands::Release { repo, tag, notes } =>
-            remote::release(cfg, &repo, &tag, &notes).await,
+            remote::release(cfg, guard, &repo, &tag, &notes).await,
         Commands::Stats { period }  => workspace::stats(cfg, json, &period),
         Commands::Activity { limit, kind } => workspace::activity(json, limit, kind),
 
@@ -34,9 +42,9 @@ pub async fn run(cmd: Commands, json: bool, cfg: &AppConfig) -> Result<()> {
 
         Commands::Pr { action }      => remote::pr(cfg, json, action).await,
         Commands::Issue { action }   => remote::issue(cfg, json, action).await,
-        Commands::Repo { action }    => remote::repo_cmd(cfg, json, action).await,
+        Commands::Repo { action }    => remote::repo_cmd(cfg, json, guard, action).await,
         Commands::Init { name, private, description } =>
-            remote::init(cfg, &name, private, &description).await,
+            remote::init(cfg, guard, &name, private, &description).await,
         Commands::Accounts           => remote::accounts(cfg, json),
         Commands::Refresh            => remote::refresh(cfg, json).await,
 
@@ -93,6 +101,29 @@ pub(crate) fn default_provider(cfg: &AppConfig) -> (crate::auth::Account, Box<dy
     match crate::providers::make_provider(&acc) {
         Ok(p) => (acc, p),
         Err(e) => die(3, &format!("provider auth failed: {e:#}")),
+    }
+}
+
+/// Whether `r` is listed in config `protected_repos` (display name or dir
+/// basename, case-insensitive).
+pub(crate) fn is_protected(cfg: &AppConfig, r: &crate::status::RepoSummary) -> bool {
+    let name = r.name.to_lowercase();
+    let base = r.path.file_name().map(|b| b.to_string_lossy().to_lowercase()).unwrap_or_default();
+    cfg.protected_repos.iter().any(|p| {
+        let p = p.trim().to_lowercase();
+        p == name || p == base
+    })
+}
+
+/// Exits 1 when any target is protected and `--force` wasn't passed.
+pub(crate) fn guard_protected(cfg: &AppConfig, force: bool, targets: &[&crate::status::RepoSummary]) {
+    if force { return; }
+    let blocked: Vec<&str> = targets.iter()
+        .filter(|r| is_protected(cfg, r))
+        .map(|r| r.name.as_str())
+        .collect();
+    if !blocked.is_empty() {
+        die(1, &format!("protected repos: {} — pass --force to proceed", blocked.join(", ")));
     }
 }
 

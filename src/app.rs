@@ -22,6 +22,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         Some(Commands::Auth(args)) => crate::auth::run(args, &cfg).await,
 
         // ── everything else: non-interactive CLI ──
-        Some(cmd) => crate::cli_cmds::run(cmd, cli.json, &cfg).await,
+        Some(cmd) => {
+            let guard = crate::cli_cmds::Guard { dry_run: cli.dry_run, force: cli.force };
+            crate::cli_cmds::run(cmd, cli.json, guard, &cfg).await
+        }
     }
 }

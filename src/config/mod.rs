@@ -44,6 +44,10 @@ pub struct AppConfig {
     /// Default template for the add-LICENSE action: "mit" or "apache-2.0".
     #[serde(default = "default_license_kind")]
     pub default_license:     String,
+    /// Repos (display name or dir basename, case-insensitive) that mutating
+    /// CLI commands refuse to touch unless `--force` is passed.
+    #[serde(default)]
+    pub protected_repos:     Vec<String>,
 }
 
 fn default_license_kind() -> String { "mit".into() }
@@ -82,6 +86,7 @@ impl Default for AppConfig {
             show_locs:          false,
             license_holder:     String::new(),
             default_license:    default_license_kind(),
+            protected_repos:    vec![],
         }
     }
 }
@@ -107,6 +112,7 @@ impl AppConfig {
             ("workspace_groups",   self.workspace_groups.join(", ")),
             ("license_holder",     self.license_holder.clone()),
             ("default_license",    self.default_license.clone()),
+            ("protected_repos",    self.protected_repos.join(", ")),
         ]
     }
 
@@ -130,6 +136,13 @@ impl AppConfig {
             "vsc_data_dir"       => self.vsc_data_dir       = PathBuf::from(&value),
             "license_holder"     => self.license_holder     = value,
             "default_license"    => self.default_license    = value,
+            "protected_repos"    => {
+                self.protected_repos = value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
             "workspace_groups"   => {
                 self.workspace_groups = value
                     .split(',')

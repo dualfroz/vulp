@@ -89,7 +89,7 @@ pub fn scan_cmd(cfg: &AppConfig, json: bool) -> Result<()> {
 }
 
 pub fn sync(
-    cfg: &AppConfig,
+    cfg: &AppConfig, guard: super::Guard,
     repos: Vec<String>, all: bool, project: Option<String>,
     action: &str, message: Option<String>,
 ) -> Result<()> {
@@ -120,10 +120,24 @@ pub fn sync(
     };
 
     let action = action.replace('-', "_"); // commit-push → commit_push
+    if !["pull", "push", "commit_push"].contains(&action.as_str()) {
+        die(2, &format!("unknown action '{action}' (pull | push | commit-push)"));
+    }
     if action == "commit_push" && message.is_none() {
         die(2, "--message is required for commit-push");
     }
     let msg = message.unwrap_or_default();
+
+    super::guard_protected(cfg, guard.force, &targets);
+    if guard.dry_run {
+        for r in &targets {
+            match action.as_str() {
+                "commit_push" => println!("DRY RUN: would commit+push {} (message: {msg})", r.name),
+                a             => println!("DRY RUN: would {a} {}", r.name),
+            }
+        }
+        return Ok(());
+    }
 
     let mut failed = 0usize;
     for r in &targets {

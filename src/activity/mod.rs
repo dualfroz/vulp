@@ -55,7 +55,17 @@ fn log_path() -> PathBuf {
 /// the Activity tab's commit feed (sourced straight from git log) covers
 /// separately and accurately regardless of how it happened.
 pub fn log(entry: &ActivityEntry) {
-    let Ok(line) = serde_json::to_string(entry) else { return };
+    // Executor marker: AI agents set VULP_AGENT so their actions are
+    // distinguishable from the human's in the shared log.
+    let mut entry = entry.clone();
+    if std::env::var("VULP_AGENT").map(|v| !v.is_empty()).unwrap_or(false) {
+        entry.detail = if entry.detail.is_empty() {
+            "via agent".into()
+        } else {
+            format!("{} · via agent", entry.detail)
+        };
+    }
+    let Ok(line) = serde_json::to_string(&entry) else { return };
     let path = log_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

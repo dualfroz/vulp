@@ -78,8 +78,13 @@ pub async fn issue(cfg: &AppConfig, json: bool, cmd: IssueCmd) -> Result<()> {
     }
 }
 
-pub async fn release(cfg: &AppConfig, repo: &str, tag: &str, notes: &str) -> Result<()> {
+pub async fn release(cfg: &AppConfig, guard: super::Guard, repo: &str, tag: &str, notes: &str) -> Result<()> {
     let r = find_repo(cfg, repo);
+    super::guard_protected(cfg, guard.force, &[&r]);
+    if guard.dry_run {
+        println!("DRY RUN: would tag {} as {tag}, push the tag, and publish a provider release", r.name);
+        return Ok(());
+    }
     let msg = if notes.is_empty() { tag } else { notes };
     git_run(&r.path, &["tag", "-a", tag, "-m", msg]);
     if !git_run_ok(&r.path, &["push", "origin", tag]) {
@@ -103,7 +108,7 @@ pub async fn release(cfg: &AppConfig, repo: &str, tag: &str, notes: &str) -> Res
     Ok(())
 }
 
-pub async fn repo_cmd(cfg: &AppConfig, json: bool, cmd: RepoCmd) -> Result<()> {
+pub async fn repo_cmd(cfg: &AppConfig, json: bool, guard: super::Guard, cmd: RepoCmd) -> Result<()> {
     match cmd {
         RepoCmd::Url { repo } => {
             let r = find_repo(cfg, &repo);
@@ -162,16 +167,21 @@ pub async fn repo_cmd(cfg: &AppConfig, json: bool, cmd: RepoCmd) -> Result<()> {
                 die(2, "role must be pull | push | admin");
             }
             let r = find_repo(cfg, &repo);
-            let (_, provider) = default_provider(cfg);
+            super::guard_protected(cfg, guard.force, &[&r]);
             let repo_basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
                 .unwrap_or_else(|| r.name.clone());
+            if guard.dry_run {
+                println!("DRY RUN: would invite {user} to {repo_basename} ({role})");
+                return Ok(());
+            }
+            let (_, provider) = default_provider(cfg);
             match provider.add_collaborator(&repo_basename, &user, &role).await {
                 Ok(()) => { println!("invited {user} to {repo_basename} ({role})"); Ok(()) }
                 Err(e) => die(1, &format!("invite failed: {e:#}")),
             }
         }
         RepoCmd::License { repos, all, kind, holder } => {
-            license(cfg, json, repos, all, kind, holder)
+            license(cfg, json, guard, repos, all, kind, holder)
         }
     }
 }
@@ -179,7 +189,7 @@ pub async fn repo_cmd(cfg: &AppConfig, json: bool, cmd: RepoCmd) -> Result<()> {
 /// `vulp repo license` — writes a LICENSE into each target repo that lacks
 /// one. Explicit names that already have a license are reported as skipped,
 /// not errors; `--all` targets every unlicensed workspace repo.
-fn license(cfg: &AppConfig, json: bool, repos: Vec<String>, all: bool,
+fn license(cfg: &AppConfig, json: bool, guard: super::Guard, repos: Vec<String>, all: bool,
            kind: Option<String>, holder: Option<String>) -> Result<()> {
     use crate::license::{LicenseKind, WriteOutcome};
 
@@ -211,6 +221,18 @@ fn license(cfg: &AppConfig, json: bool, repos: Vec<String>, all: bool,
         }).collect()
     };
 
+    super::guard_protected(cfg, guard.force, &targets);
+    if guard.dry_run {
+        for r in &targets {
+            if r.has_license {
+                println!("DRY RUN: would skip {} (already has a license)", r.name);
+            } else {
+                println!("DRY RUN: would write {} LICENSE to {} (holder: {holder})", kind.label(), r.name);
+            }
+        }
+        return Ok(());
+    }
+
     let year = chrono::Datelike::year(&chrono::Utc::now());
     let (mut written, mut skipped, mut failed) = (Vec::new(), Vec::new(), Vec::new());
     for r in targets {
@@ -240,10 +262,15 @@ fn license(cfg: &AppConfig, json: bool, repos: Vec<String>, all: bool,
     Ok(())
 }
 
-pub async fn init(cfg: &AppConfig, name: &str, private: bool, description: &str) -> Result<()> {
+pub async fn init(cfg: &AppConfig, guard: super::Guard, name: &str, private: bool, description: &str) -> Result<()> {
     let path = cfg.workspace_root.join(name);
     if path.exists() {
         die(1, &format!("{} already exists", path.display()));
+    }
+    if guard.dry_run {
+        println!("DRY RUN: would init {}, create a {} repo on the provider, and push",
+                 path.display(), if private { "private" } else { "public" });
+        return Ok(());
     }
     let (_, provider) = default_provider(cfg);
 

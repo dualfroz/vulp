@@ -23,6 +23,20 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 - Mutating commands write to the same `~/.vulp/activity.log` as the TUI,
   so CLI actions appear in the TUI's Overview feed.
 
+## Guardrails (for AI agents especially)
+
+- **`--dry-run`** (global flag): mutating commands (`sync`, `release`,
+  `init`, `repo collab`, `repo license`) print `DRY RUN: would ...` lines
+  and exit 0 without changing anything. Read commands ignore it.
+- **`protected_repos`** (config, comma-separated in `vulp config`): mutating
+  commands refuse to touch listed repos (exit 1) unless **`--force`** is
+  passed. Matching is by display label or dir basename, case-insensitive.
+  The protection check runs before `--dry-run`, so a dry run also reveals it.
+- **`VULP_AGENT`** (env var, any non-empty value): every activity-log entry
+  written while it's set gets a `· via agent` marker in its detail, so human
+  and agent actions are distinguishable in `vulp activity` and the TUI feed.
+  AI agents driving vulp should always set it.
+
 ## Workspace (local, no network)
 
 ```

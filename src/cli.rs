@@ -19,6 +19,13 @@ pub struct Cli {
     /// Machine-readable JSON output on stdout (list/status/stats/... commands)
     #[arg(long, global = true)]
     pub json: bool,
+    /// Print what a mutating command (sync/release/init/collab/license)
+    /// would do without doing it
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+    /// Proceed on repos listed in config `protected_repos`
+    #[arg(long, global = true)]
+    pub force: bool,
 }
 
 #[derive(Subcommand)]
