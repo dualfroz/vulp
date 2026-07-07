@@ -38,12 +38,16 @@ use settings_io::{compute_activity, poll_api_rx, poll_prs_issues_rx, poll_settin
 
 /// Opens the detail view for `summary`. Reuses an already-live terminal
 /// handed over by the hub when given one (avoids a flash of the alternate
-/// screen toggling off and back on), otherwise sets up a fresh one.
+/// screen toggling off and back on), otherwise sets up a fresh one. On a
+/// normal exit (back to the hub), hands the still-live terminal back to the
+/// caller instead of tearing it down — the hub reuses it for its own next
+/// frame, so the alternate screen never toggles off in between. Only torn
+/// down here if `run_detail_loop` itself errors.
 pub async fn run(
     summary:   RepoSummary,
     cfg:       &AppConfig,
     maybe_term: Option<crate::tui::Tty>,
-) -> Result<()> {
+) -> Result<crate::tui::Tty> {
     let path = summary.path.clone();
     let name = summary.name.clone();
 
@@ -147,9 +151,10 @@ pub async fn run(
     };
 
     // Main loop — terminal stays alive the whole time.
-    let result = run_detail_loop(&mut st, &mut terminal).await;
-    crate::tui::teardown(terminal)?;
-    result
+    match run_detail_loop(&mut st, &mut terminal).await {
+        Ok(())  => Ok(terminal),
+        Err(e)  => { crate::tui::teardown(terminal)?; Err(e) }
+    }
 }
 
 async fn run_detail_loop(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<()> {

@@ -109,28 +109,41 @@ impl St {
 
 /// Runs the project detail sub-view until the user backs out. Reuses the
 /// caller's terminal handle when given one (avoids an alternate-screen
-/// flash when entering from the hub), otherwise sets up its own.
-pub async fn run(project: Project, repos: Vec<RepoSummary>, cfg: &AppConfig, maybe_term: Option<crate::tui::Tty>) -> Result<()> {
-    let mut terminal = match maybe_term {
+/// flash when entering from the hub), otherwise sets up its own. On a
+/// normal exit, hands the still-live terminal back to the caller instead of
+/// tearing it down, so the hub can reuse it for its own next frame without
+/// the alternate screen toggling off in between; only torn down here if
+/// `run_loop` itself errors.
+pub async fn run(project: Project, repos: Vec<RepoSummary>, cfg: &AppConfig, maybe_term: Option<crate::tui::Tty>) -> Result<crate::tui::Tty> {
+    // `Option` (rather than a bare `Tty`) so the Enter-on-Repos branch below
+    // can `take()` it out for the nested `crate::detail::run` call (which
+    // needs to own the terminal to hand it further down) and put the
+    // (possibly-recreated) terminal back afterwards, without ever tearing
+    // down and setting up a fresh one in between.
+    let mut terminal = Some(match maybe_term {
         Some(t) => t,
         None    => crate::tui::setup()?,
-    };
+    });
     let mut st = St::new(project, repos, cfg.clone());
 
     // Spawn commits aggregation immediately
     spawn_commits(&mut st);
 
-    let result = run_loop(&mut st, &mut terminal).await;
-    crate::tui::teardown(terminal)?;
-    result
+    match run_loop(&mut st, &mut terminal).await {
+        Ok(())  => Ok(terminal.expect("terminal always present after a clean run_loop exit")),
+        Err(e)  => {
+            if let Some(t) = terminal.take() { crate::tui::teardown(t)?; }
+            Err(e)
+        }
+    }
 }
 
-async fn run_loop(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<()> {
+async fn run_loop(st: &mut St, terminal: &mut Option<crate::tui::Tty>) -> Result<()> {
     loop {
         poll_commits(st);
         poll_activity(st);
 
-        terminal.draw(|f| super::project_detail_render::draw(f, st))?;
+        terminal.as_mut().expect("terminal present during run_loop").draw(|f| super::project_detail_render::draw(f, st))?;
 
         let event = crate::tui::next_event(250)?;
         let key = match event { Some(Event::Key(k)) => k, _ => continue };
@@ -182,13 +195,13 @@ async fn run_loop(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<()> {
             continue;
         }
 
-        handle_key(key.code, st).await;
+        handle_key(key.code, st, terminal).await;
         if st.quit { break; }
     }
     Ok(())
 }
 
-async fn handle_key(code: KeyCode, st: &mut St) {
+async fn handle_key(code: KeyCode, st: &mut St, terminal: &mut Option<crate::tui::Tty>) {
     st.status_msg = None;
     match code {
         KeyCode::Char('q') | KeyCode::Esc => { st.quit = true; }
@@ -233,7 +246,16 @@ async fn handle_key(code: KeyCode, st: &mut St) {
         KeyCode::Enter => match st.tab {
             ProjectTab::Repos => {
                 if let Some(r) = st.repos.get(st.repo_cursor).cloned() {
-                    let _ = crate::detail::run(r, &st.cfg, None).await;
+                    // Hand our live terminal down (no flash), then take back
+                    // whatever it returns instead of tearing it down here.
+                    let handed = terminal.take();
+                    match crate::detail::run(r, &st.cfg, handed).await {
+                        Ok(t)  => *terminal = Some(t),
+                        // detail::run already tore its (our) terminal down on
+                        // error — nothing left to draw to, so back out clean
+                        // instead of panicking on the next frame's `.expect`.
+                        Err(_) => st.quit = true,
+                    }
                 }
             }
             ProjectTab::Todos => {

@@ -174,8 +174,13 @@ pub async fn run_overview_tui(
         log
     };
 
+    // Carried across loop iterations so a terminal handed back by a sub-view
+    // (repo/project detail) can be reused by the next `tui_phase` call
+    // instead of tearing down and setting a fresh one up — see `tui_phase`'s
+    // doc comment for the flash this avoids.
+    let mut carried_term: Option<crate::tui::Tty> = None;
     loop {
-        let (phase_result, handed_term) = tui_phase(&mut state)?;
+        let (phase_result, handed_term) = tui_phase(&mut state, carried_term.take())?;
 
         if state.quit {
             session::save(state.tab, state.cur_repo_idx().map(|ri| state.repos[ri].path.clone()));
@@ -186,12 +191,14 @@ pub async fn run_overview_tui(
             PhaseResult::OpenDetail => {
                 state.open_detail = false;
                 if let Some(ri) = state.cur_repo_idx() {
-                    let _ = crate::status::detail::run(state.repos[ri].clone(), cfg, handed_term).await;
+                    if let Ok(term) = crate::status::detail::run(state.repos[ri].clone(), cfg, handed_term).await {
+                        carried_term = Some(term);
+                    }
                 } else if let Some(pi) = state.cur_proj_idx() {
                     let repo_indices = state.project_repos(pi);
                     let proj_repos: Vec<RepoSummary> =
                         repo_indices.iter().filter_map(|&ri| state.repos.get(ri)).cloned().collect();
-                    project_detail::run(state.projects[pi].clone(), proj_repos, cfg, handed_term).await?;
+                    carried_term = Some(project_detail::run(state.projects[pi].clone(), proj_repos, cfg, handed_term).await?);
                 }
                 // Detail view can rename/delete/archive repos or change branches —
                 // rescan so the hub's list reflects whatever just happened, instead

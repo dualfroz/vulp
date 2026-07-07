@@ -148,8 +148,16 @@ pub fn maybe_load_activity(state: &mut HubState) {
 /// event, and routes it to whichever input mode is currently active. Modal/
 /// confirm/filter input short-circuit here (they're loop control flow, not
 /// part of the global keymap); everything else goes to `keys_dispatch`.
-pub fn tui_phase(state: &mut HubState) -> Result<(PhaseResult, Option<crate::tui::Tty>)> {
-    let mut terminal = crate::tui::setup()?;
+///
+/// `existing_term` lets the caller hand back a terminal a sub-view (repo/
+/// project detail) just returned instead of tearing down and setting up a
+/// fresh one — the previous "leave alt screen, blink the real terminal,
+/// re-enter" was visible for a frame every time detail handed control back.
+pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -> Result<(PhaseResult, Option<crate::tui::Tty>)> {
+    let mut terminal = match existing_term {
+        Some(t) => t,
+        None    => crate::tui::setup()?,
+    };
     let result = (|| -> Result<PhaseResult> {
         loop {
             state.poll_incoming();
