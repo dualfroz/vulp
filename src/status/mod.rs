@@ -43,6 +43,10 @@ pub struct RepoSummary {
     pub ci_status:       Option<String>,
     /// Open Dependabot alerts (from the meta cache / API refresh).
     pub dependabot_open: Option<u32>,
+    /// Deploy-drift state string (`deploy::DeployState::as_str`), from the
+    /// meta cache / `[R]` refresh; None = not deployed anywhere the mirror
+    /// convention can see, or the feature isn't configured.
+    pub deploy_status: Option<String>,
 }
 
 /// One commit's display fields for a recent-commits list.
@@ -398,7 +402,7 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
         last_tag, visibility: None, owner, has_license, lang, bookmarked: false,
         stars: None, open_issues: None, open_prs: None,
         stash_count,
-        ci_status: None, dependabot_open: None,
+        ci_status: None, dependabot_open: None, deploy_status: None,
     })
 }
 

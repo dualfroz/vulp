@@ -53,6 +53,15 @@ pub struct AppConfig {
     /// no-reply address for each configured account is always matched too.
     #[serde(default)]
     pub stats_author_emails: Vec<String>,
+    /// Command (program + args, split on whitespace) that runs its final
+    /// argument as a shell command on the deploy host and prints stdout —
+    /// e.g. a wrapper around `ssh`. Empty = deploy-drift feature disabled.
+    #[serde(default)]
+    pub deploy_ssh_cmd:      String,
+    /// Root on the deploy host that mirrors `workspace_root` 1:1 (relative
+    /// paths past these two roots are identical). Empty = feature disabled.
+    #[serde(default)]
+    pub deploy_root:         String,
 }
 
 fn default_license_kind() -> String { "mit".into() }
@@ -93,6 +102,8 @@ impl Default for AppConfig {
             default_license:    default_license_kind(),
             protected_repos:    vec![],
             stats_author_emails: vec![],
+            deploy_ssh_cmd:     String::new(),
+            deploy_root:        String::new(),
         }
     }
 }
@@ -120,6 +131,8 @@ impl AppConfig {
             ("default_license",    self.default_license.clone()),
             ("protected_repos",    self.protected_repos.join(", ")),
             ("stats_author_emails", self.stats_author_emails.join(", ")),
+            ("deploy_ssh_cmd",     self.deploy_ssh_cmd.clone()),
+            ("deploy_root",        self.deploy_root.clone()),
         ]
     }
 
@@ -157,6 +170,8 @@ impl AppConfig {
                     .filter(|s| !s.is_empty())
                     .collect();
             }
+            "deploy_ssh_cmd"     => self.deploy_ssh_cmd     = value,
+            "deploy_root"        => self.deploy_root        = value,
             "workspace_groups"   => {
                 self.workspace_groups = value
                     .split(',')

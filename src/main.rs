@@ -12,6 +12,7 @@ mod cli_cmds;
 mod codeintel;
 mod config;
 mod debug;
+mod deploy;
 mod detail;
 mod digest;
 mod hub;

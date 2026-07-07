@@ -20,7 +20,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
     let cur_di = state.cur_di().unwrap_or(usize::MAX);
 
     let header = Row::new(vec![
-        "    ", "NAME", "BRANCH", "PROJECT", "VISIB", "AGE", "STATUS", "RELEASE", "LICENSE", "CI", "ALERT", "STARS",
+        "    ", "NAME", "BRANCH", "PROJECT", "VISIB", "AGE", "STATUS", "RELEASE", "LICENSE", "CI", "ALERT", "DEPLOY", "STARS",
     ]).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = state.display.iter().enumerate()
@@ -66,6 +66,13 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
                 Some(0) | None => Color::DarkGray,
                 Some(_)        => Color::Red,
             };
+            let deploy_state = r.deploy_status.as_deref().and_then(crate::deploy::DeployState::parse);
+            let (deploy_str, deploy_col) = match deploy_state {
+                Some(crate::deploy::DeployState::InSync)     => ("✓".to_string(), Color::Green),
+                Some(crate::deploy::DeployState::Behind(n))  => (format!("-{n}"), Color::Yellow),
+                Some(crate::deploy::DeployState::Diverged)   => ("≠".to_string(), Color::Red),
+                None                                          => ("—".to_string(), Color::DarkGray),
+            };
             let stars_str = r.stars.map(|s| format!("{}", s)).unwrap_or_else(|| "—".into());
             let stars_col = if r.stars.is_some() { Color::Yellow } else { Color::DarkGray };
             let is_pinned = state.pins.contains(&r.path);
@@ -88,6 +95,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
                 Cell::from(lic_str).style(Style::default().fg(if r.has_license { Color::Green } else { Color::DarkGray })),
                 Cell::from(ci_str).style(Style::default().fg(ci_col)),
                 Cell::from(dep_str).style(Style::default().fg(dep_col)),
+                Cell::from(deploy_str).style(Style::default().fg(deploy_col)),
                 Cell::from(stars_str).style(Style::default().fg(stars_col)),
             ]).style(row_sty))
         })
@@ -105,6 +113,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
         Constraint::Length(9),
         Constraint::Length(4),
         Constraint::Length(6),
+        Constraint::Length(7),
         Constraint::Length(8),
     ];
     f.render_widget(Table::new(rows, widths).header(header), area);

@@ -49,6 +49,8 @@ pub enum Commands {
         #[arg(long)] project: Option<String>,
         /// Only repos with open Dependabot alerts (cached — run refresh first)
         #[arg(long)] alerts: bool,
+        /// Only repos whose deploy host is behind or diverged (needs deploy_ssh_cmd/deploy_root configured)
+        #[arg(long)] stale_deploy: bool,
     },
     /// Detailed status of one repo
     Status { repo: String },

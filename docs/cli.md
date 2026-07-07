@@ -50,7 +50,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 ```
 vulp scan                                # repo count + dirty/behind/ahead summary
 vulp brief [repo]                        # one-shot picture: state + commits + todos + PR/issues
-vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME] [--alerts]
+vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME] [--alerts] [--stale-deploy]
 vulp status <repo>                       # branch, dirty, ahead/behind, last commit...
 vulp stats [--period 1d|7d|30d|90d|1y|all]   # commits per repo in period
 vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|commit|license]
@@ -63,15 +63,40 @@ vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|com
    "last_commit_ts": 1780000000, "last_tag": null, "visibility": null,
    "owner": "dualfroz", "has_license": false, "lang": "TypeScript 96%",
    "bookmarked": false, "stars": null, "open_issues": null, "open_prs": null,
-   "stash_count": 0, "ci_status": "success", "dependabot_open": 0 }]
+   "stash_count": 0, "ci_status": "success", "dependabot_open": 0,
+   "deploy_status": "behind:3" }]
 ```
 
-`stars`/`open_issues`/`open_prs`/`ci_status`/`dependabot_open` come from the
-on-disk cache (run `vulp refresh` first). `ci_status` is
+`stars`/`open_issues`/`open_prs`/`ci_status`/`dependabot_open`/`deploy_status`
+come from the on-disk cache (run `vulp refresh` first). `ci_status` is
 `"success" | "failure" | "running" | null`; `dependabot_open: null` means the
 alert endpoint isn't available for that repo's owner (personal account,
 missing token scope, or feature disabled) as opposed to `0` = "checked, none
 open". `--alerts` filters to repos with `dependabot_open > 0`.
+
+`deploy_status` is `"in_sync" | "behind:N" | "diverged" | null` — see
+**Deploy drift** below. `--stale-deploy` filters to repos that are `behind`
+or `diverged` (excludes `in_sync` and `null`/not-applicable).
+
+## Deploy drift
+
+Auto-discovered, not manually configured: if `deploy_root` (config) mirrors
+`workspace_root` 1:1 on a remote host (e.g. `/opt/projects/X/Y` on the host
+↔ `{workspace_root}/X/Y` locally), and `deploy_ssh_cmd` (config) is a command
+that runs its final argument as a shell command on that host and prints the
+result (a wrapper around `ssh`), `vulp refresh` runs **one** batched remote
+command listing every mirrored repo's HEAD sha, then compares each against
+local HEAD. A repo with no mirror on the host (nothing to compare against —
+e.g. a pure open-source component that never runs live anywhere) simply has
+`deploy_status: null`, not an error.
+
+```toml
+# ~/.vulp/config.toml
+deploy_ssh_cmd = "python3 /path/to/vps_exec.py"   # appends the remote command as its last arg
+deploy_root    = "/opt/projects"
+```
+
+Both empty (the default) disables the feature entirely — no SSH attempted.
 
 ## Git operations
 

@@ -87,6 +87,7 @@ pub async fn run_overview_tui(
             r.open_prs        = m.open_prs;
             r.ci_status       = m.ci_status.clone();
             r.dependabot_open = m.dependabot_open;
+            r.deploy_status   = m.deploy_status.clone();
             if r.visibility.is_none() { r.visibility = m.visibility.clone(); }
         }
     }

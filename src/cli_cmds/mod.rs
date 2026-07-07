@@ -27,8 +27,8 @@ pub(crate) struct Guard {
 /// `Config`/`Auth`/the bare TUI (those keep their existing paths in `app.rs`).
 pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Result<()> {
     match cmd {
-        Commands::List { dirty, behind, ahead, lang, project, alerts } =>
-            workspace::list(cfg, json, dirty, behind, ahead, lang, project, alerts),
+        Commands::List { dirty, behind, ahead, lang, project, alerts, stale_deploy } =>
+            workspace::list(cfg, json, dirty, behind, ahead, lang, project, alerts, stale_deploy),
         Commands::Status { repo }   => workspace::status(cfg, json, &repo),
         Commands::Scan              => workspace::scan_cmd(cfg, json),
         Commands::Sync { repos, all, project, action, message, allow_secrets } =>
@@ -88,6 +88,7 @@ pub(crate) fn scan_repos(cfg: &AppConfig) -> Vec<crate::status::RepoSummary> {
             r.open_prs        = m.open_prs;
             r.ci_status       = m.ci_status.clone();
             r.dependabot_open = m.dependabot_open;
+            r.deploy_status   = m.deploy_status.clone();
             if r.visibility.is_none() { r.visibility = m.visibility.clone(); }
         }
     }

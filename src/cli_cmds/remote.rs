@@ -339,6 +339,16 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
         }
     }
 
+    // Deploy drift: one batched remote command (if configured) lists every
+    // mirrored repo's HEAD sha; comparing against local HEAD is then a cheap
+    // per-repo git call, folded into the metas loop below.
+    let deploy_heads = if crate::deploy::is_configured(cfg) {
+        eprintln!("checking deploy drift...");
+        crate::deploy::scan_deploy_heads(cfg)
+    } else {
+        None
+    };
+
     let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug, branch)| {
         let provider = provider.clone();
         async move {
@@ -362,6 +372,10 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
                 .get(slug_lc.split('/').next().unwrap_or(""))
                 .and_then(|per_org| per_org.as_ref()
                     .map(|m| m.get(&slug_lc).copied().unwrap_or(0)));
+            let deploy_status = deploy_heads.as_ref().and_then(|heads| {
+                let path = &repos.iter().find(|r| r.name == name)?.path;
+                crate::deploy::drift_for(path, &cfg.workspace_root, heads)
+            }).map(|s| s.as_str());
             cache.set_meta(&name, crate::cache::RepoMeta {
                 stars:           Some(meta.stars),
                 open_issues:     Some(meta.open_issues),
@@ -369,6 +383,7 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
                 visibility:      None,
                 ci_status:       ci.map(|c| c.as_str().to_string()),
                 dependabot_open: dep,
+                deploy_status,
                 fetched_at:      chrono::Utc::now().timestamp(),
             });
             fetched_meta += 1;

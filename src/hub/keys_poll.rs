@@ -146,6 +146,7 @@ pub fn poll_refresh(state: &mut HubState) {
             r.open_prs        = meta.open_prs;
             r.ci_status       = meta.ci_status.clone();
             r.dependabot_open = meta.dependabot_open;
+            r.deploy_status   = meta.deploy_status.clone();
         }
         cache.set_meta(&name, meta);
         fetched_meta += 1;

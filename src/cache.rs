@@ -21,6 +21,10 @@ pub struct RepoMeta {
     pub ci_status:   Option<String>,
     /// Open Dependabot alerts; None = endpoint unavailable for this repo.
     pub dependabot_open: Option<u32>,
+    /// Deploy-drift state (`DeployState::as_str`); None = not deployed
+    /// anywhere the mirror convention can see, or feature not configured.
+    #[serde(default)]
+    pub deploy_status: Option<String>,
     pub fetched_at:  i64,
 }
 

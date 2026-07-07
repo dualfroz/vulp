@@ -9,7 +9,7 @@ use anyhow::Result;
 pub fn list(
     cfg: &AppConfig, json: bool,
     dirty: bool, behind: bool, ahead: bool,
-    lang: Option<String>, project: Option<String>, alerts: bool,
+    lang: Option<String>, project: Option<String>, alerts: bool, stale_deploy: bool,
 ) -> Result<()> {
     let mut repos = scan_repos(cfg);
 
@@ -17,6 +17,14 @@ pub fn list(
     if behind { repos.retain(|r| r.behind > 0); }
     if ahead  { repos.retain(|r| r.ahead > 0); }
     if alerts { repos.retain(|r| r.dependabot_open.unwrap_or(0) > 0); }
+    if stale_deploy {
+        repos.retain(|r| {
+            !matches!(
+                r.deploy_status.as_deref().and_then(crate::deploy::DeployState::parse),
+                None | Some(crate::deploy::DeployState::InSync)
+            )
+        });
+    }
     if let Some(l) = lang {
         let l = l.to_lowercase();
         repos.retain(|r| r.lang.as_deref().map(|x| x.to_lowercase().contains(&l)).unwrap_or(false));
@@ -45,7 +53,15 @@ pub fn list(
         if r.is_dirty   { flags.push('⚠'); }
         if r.behind > 0 { flags.push('↓'); }
         if r.ahead > 0  { flags.push('↑'); }
-        if alerts {
+        if stale_deploy {
+            let state = r.deploy_status.as_deref().and_then(crate::deploy::DeployState::parse);
+            let label = match state {
+                Some(crate::deploy::DeployState::Behind(n)) => format!("{n} behind"),
+                Some(crate::deploy::DeployState::Diverged)  => "diverged".into(),
+                _ => "-".into(),
+            };
+            println!("{:<name_w$}  {:<12}  {:<10}  {}", r.name, r.branch, label, r.lang.as_deref().unwrap_or("-"));
+        } else if alerts {
             println!(
                 "{:<name_w$}  {:<12}  {:>3} alerts  {}",
                 r.name, r.branch, r.dependabot_open.unwrap_or(0),
