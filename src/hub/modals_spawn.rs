@@ -718,14 +718,16 @@ pub fn spawn_api_refresh(state: &mut HubState) {
         Ok(a) if !a.is_empty() => a,
         _ => { state.status_msg = Some("No accounts configured — vulp auth add".into()); return; }
     };
-    // (display name = cache key, owner/basename slug for the API, branch for
+    // (display name = cache key, owner/repo slug for the API, branch for
     // the CI-run lookup). Org-owned repos are reachable through the personal
-    // token, so no owner filtering.
+    // token, so no owner filtering. The repo name comes from the remote URL,
+    // not the local folder name — they can differ (vulp's own folder is
+    // "vulp", its GitHub repo is "fxg").
     let repos: Vec<(String, Option<String>, String, String)> = state.repos.iter()
         .map(|r| {
-            let basename = r.path.file_name()
-                .map(|b| b.to_string_lossy().to_string())
-                .unwrap_or_else(|| r.name.clone());
+            let basename = r.remote_repo_name.clone().unwrap_or_else(|| {
+                r.path.file_name().map(|b| b.to_string_lossy().to_string()).unwrap_or_else(|| r.name.clone())
+            });
             (r.name.clone(), r.owner.clone(), basename, r.branch.clone())
         })
         .collect();

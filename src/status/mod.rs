@@ -29,6 +29,10 @@ pub struct RepoSummary {
     pub last_tag:        Option<String>,
     pub visibility:      Option<String>,
     pub owner:           Option<String>,  // parsed from git remote URL
+    /// The provider-side repo name parsed from the git remote URL — not
+    /// necessarily the local folder name (see `parse_repo_name_from_url`).
+    /// Provider-API slugs must use this, never `path.file_name()`.
+    pub remote_repo_name: Option<String>,
     pub has_license:     bool,
     pub lang:            Option<String>,
     pub bookmarked:      bool,
@@ -94,10 +98,37 @@ fn parse_owner_from_url(url: &str) -> Option<String> {
     None
 }
 
+/// Extracts the `repo` segment from an HTTPS or SSH git remote URL — the
+/// name the provider actually knows the repo by, which is not necessarily
+/// the local folder's name (a repo can be cloned into, or renamed to, any
+/// directory name locally; `vulp`'s own local folder is "vulp" but its
+/// GitHub repo is "fxg"). Callers building a provider-API slug must prefer
+/// this over `path.file_name()`.
+fn parse_repo_name_from_url(url: &str) -> Option<String> {
+    if url.starts_with("http") {
+        let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
+        return trimmed.rsplit('/').next().map(|s| s.to_string());
+    }
+    // git@github.com:owner/repo.git
+    if let Some(colon) = url.rfind(':') {
+        let after = url[colon + 1..].trim_start_matches('/').trim_end_matches(".git");
+        return after.rsplit('/').next().map(|s| s.to_string());
+    }
+    None
+}
+
 /// Parses the owner from `repo`'s `origin` remote, if it has one.
 fn extract_owner(repo: &Repository) -> Option<String> {
     let remote = repo.find_remote("origin").ok()?;
     parse_owner_from_url(remote.url()?)
+}
+
+/// Parses the provider-side repo name from `repo`'s `origin` remote, if it
+/// has one — see `parse_repo_name_from_url` for why this can differ from
+/// the local folder name.
+fn extract_remote_repo_name(repo: &Repository) -> Option<String> {
+    let remote = repo.find_remote("origin").ok()?;
+    parse_repo_name_from_url(remote.url()?)
 }
 
 // ── license + language detection ──────────────────────────────────────────────
@@ -372,6 +403,7 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     let tag_ms   = t_tag.elapsed().as_millis();
 
     let owner   = extract_owner(&repo);
+    let remote_repo_name = extract_remote_repo_name(&repo);
     let has_license = detect_license(path);
 
     let t_lang = std::time::Instant::now();
@@ -399,7 +431,7 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     Ok(RepoSummary {
         name, path: path.to_path_buf(), branch, ahead, behind, is_dirty,
         last_commit_msg: msg, last_commit_age: age, last_commit_ts: ts,
-        last_tag, visibility: None, owner, has_license, lang, bookmarked: false,
+        last_tag, visibility: None, owner, remote_repo_name, has_license, lang, bookmarked: false,
         stars: None, open_issues: None, open_prs: None,
         stash_count,
         ci_status: None, dependabot_open: None, deploy_status: None,

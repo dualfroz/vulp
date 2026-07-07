@@ -95,8 +95,9 @@ pub async fn release(cfg: &AppConfig, guard: super::Guard, repo: &str, tag: &str
     let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();
     if let Some(acc) = accounts.iter().find(|a| a.is_default).or(accounts.first()) {
         if let Ok(provider) = crate::providers::make_provider(acc) {
-            let repo_basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
-                .unwrap_or_else(|| r.name.clone());
+            let repo_basename = r.remote_repo_name.clone().unwrap_or_else(|| {
+                r.path.file_name().map(|b| b.to_string_lossy().to_string()).unwrap_or_else(|| r.name.clone())
+            });
             match provider.create_release(&repo_basename, tag, tag, notes, false).await {
                 Ok(url) => println!("{url}"),
                 Err(e)  => eprintln!("warning: tag pushed, but provider release failed: {e:#}"),
@@ -168,8 +169,9 @@ pub async fn repo_cmd(cfg: &AppConfig, json: bool, guard: super::Guard, cmd: Rep
             }
             let r = find_repo(cfg, &repo);
             super::guard_protected(cfg, guard.force, &[&r]);
-            let repo_basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
-                .unwrap_or_else(|| r.name.clone());
+            let repo_basename = r.remote_repo_name.clone().unwrap_or_else(|| {
+                r.path.file_name().map(|b| b.to_string_lossy().to_string()).unwrap_or_else(|| r.name.clone())
+            });
             if guard.dry_run {
                 println!("DRY RUN: would invite {user} to {repo_basename} ({role})");
                 return Ok(());
@@ -316,11 +318,14 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     let repos = super::scan_repos(cfg);
 
     // Org-owned repos are reachable through the personal token — refresh
-    // everything with an owner, addressed by full "owner/basename" slug.
+    // everything with an owner, addressed by full "owner/repo" slug. The
+    // repo name comes from the remote URL, not the local folder name — they
+    // can differ (vulp's own folder is "vulp", its GitHub repo is "fxg").
     let targets: Vec<(String, String, String)> = repos.iter()
         .filter_map(|r| {
-            let basename = r.path.file_name().map(|b| b.to_string_lossy().to_string())
-                .unwrap_or_else(|| r.name.clone());
+            let basename = r.remote_repo_name.clone().unwrap_or_else(|| {
+                r.path.file_name().map(|b| b.to_string_lossy().to_string()).unwrap_or_else(|| r.name.clone())
+            });
             r.owner.as_ref().map(|o| (r.name.clone(), format!("{}/{}", o, basename), r.branch.clone()))
         })
         .collect();
