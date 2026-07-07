@@ -618,10 +618,13 @@ pub fn open_action_menu(state: &mut HubState) {
     match state.tab {
         Tab::Todos => {
             entries.push(entry("Cycle todo status",   "Space", kc(KeyCode::Char(' '))));
+            entries.push(entry("Expand/collapse group","↵",    kc(KeyCode::Enter)));
             entries.push(entry("Edit todo",           "e",     k('e')));
             entries.push(entry("Delete todo",         "Del",   kc(KeyCode::Delete)));
             entries.push(entry("New todo",            "+",     k('+')));
-            entries.push(entry("Toggle code todos",   "X",     k('X')));
+            entries.push(entry("Cycle status view",   "s",     k('s')));
+            entries.push(entry("Cycle grouping",      "g",     k('g')));
+            entries.push(entry("Toggle code todos",   "c",     k('c')));
             entries.push(entry("Scan repos for TODOs","T",     k('T')));
         }
         Tab::PRs => {

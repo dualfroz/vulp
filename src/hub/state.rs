@@ -13,7 +13,8 @@ pub use super::state_rows::*;
 use crate::projects::{self, Project};
 use crate::providers::{IssueDetail, PrDetail};
 use crate::status::{count_tracked_files, repo_recent_commits, RepoSummary};
-use crate::todos::{Todo, TodoSource};
+use crate::status::format_age_pub;
+use crate::todos::{Todo, TodoSource, TodoStatus};
 use ratatui::style::Color;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -70,6 +71,13 @@ pub struct HubState {
     pub editor:         String,
     pub clipboard_cmd:  String,
     pub show_code_todos:bool,
+    pub todo_status_view: TodoStatusView,
+    pub todo_group_by:    TodoGroupBy,
+    /// Group keys currently collapsed on the Todos tab (e.g. "Done",
+    /// "Cancelled", a project name, a repo name — whatever the current
+    /// `todo_group_by` mode keys groups by). Toggled by Enter/Space on a
+    /// header row; not persisted across restarts.
+    pub todo_group_collapsed: HashSet<String>,
     pub debug_mode:   bool,
     pub debug_log:    Vec<String>,
     /// Live receiver from the background scan thread; None when scan is complete.
@@ -178,12 +186,7 @@ impl HubState {
                     d.push(DisplayRow::Project { proj_idx: pi });
                 }
             }
-            Tab::Todos => {
-                for (ti, t) in self.todos.iter().enumerate() {
-                    if !self.show_code_todos && t.source == TodoSource::CodeScan { continue; }
-                    d.push(DisplayRow::Todo { todo_idx: ti });
-                }
-            }
+            Tab::Todos => self.build_todos_display(&mut d),
             Tab::PRs => {
                 for i in 0..self.prs.len() {
                     d.push(DisplayRow::Pr { pr_idx: i });
@@ -212,6 +215,83 @@ impl HubState {
         self.display = d;
     }
 
+    /// Builds the Todos tab's display rows: status-view-filters the todo
+    /// list, then groups what survives per `todo_group_by` — `None` just
+    /// sorts by recency, the other modes interleave a collapsible
+    /// `TodoHeader` before each group's rows (omitted entirely when that
+    /// group's key is in `todo_group_collapsed`).
+    fn build_todos_display(&self, d: &mut Vec<DisplayRow>) {
+        let filtered: Vec<usize> = (0..self.todos.len())
+            .filter(|&ti| {
+                let t = &self.todos[ti];
+                if !self.show_code_todos && t.source == TodoSource::CodeScan { return false; }
+                self.todo_status_view.allows(&t.status)
+            })
+            .collect();
+
+        let by_recency = |a: &usize, b: &usize| self.todos[*b].updated_at.cmp(&self.todos[*a].updated_at);
+
+        match self.todo_group_by {
+            TodoGroupBy::None => {
+                let mut sorted = filtered;
+                sorted.sort_by(by_recency);
+                for ti in sorted { d.push(DisplayRow::Todo { todo_idx: ti }); }
+            }
+            TodoGroupBy::Status => {
+                for status in [TodoStatus::InProgress, TodoStatus::Open, TodoStatus::Done, TodoStatus::Cancelled] {
+                    let mut group: Vec<usize> = filtered.iter().copied()
+                        .filter(|&ti| self.todos[ti].status == status).collect();
+                    if group.is_empty() { continue; }
+                    group.sort_by(by_recency);
+                    let key = status.label().to_string();
+                    let extra = if status == TodoStatus::Done {
+                        format!(" · ostatni {}", format_age_pub(self.todos[group[0]].updated_at))
+                    } else {
+                        String::new()
+                    };
+                    self.push_todo_group(d, key.clone(), status.label().to_string(), group, extra);
+                }
+            }
+            TodoGroupBy::Project => {
+                let mut keys: Vec<String> = filtered.iter()
+                    .map(|&ti| self.todos[ti].project.clone().unwrap_or_else(|| "— brak projektu —".into()))
+                    .collect();
+                keys.sort(); keys.dedup();
+                for key in keys {
+                    let mut group: Vec<usize> = filtered.iter().copied()
+                        .filter(|&ti| self.todos[ti].project.as_deref().unwrap_or("— brak projektu —") == key)
+                        .collect();
+                    group.sort_by(by_recency);
+                    self.push_todo_group(d, key.clone(), key, group, String::new());
+                }
+            }
+            TodoGroupBy::Repo => {
+                let mut keys: Vec<String> = filtered.iter()
+                    .map(|&ti| self.todos[ti].repo.clone().unwrap_or_else(|| "— brak repo —".into()))
+                    .collect();
+                keys.sort(); keys.dedup();
+                for key in keys {
+                    let mut group: Vec<usize> = filtered.iter().copied()
+                        .filter(|&ti| self.todos[ti].repo.as_deref().unwrap_or("— brak repo —") == key)
+                        .collect();
+                    group.sort_by(by_recency);
+                    self.push_todo_group(d, key.clone(), key, group, String::new());
+                }
+            }
+        }
+    }
+
+    /// Pushes one group's header row, then its todo rows unless the group
+    /// is collapsed.
+    fn push_todo_group(&self, d: &mut Vec<DisplayRow>, key: String, label: String, group: Vec<usize>, extra: String) {
+        let count = group.len();
+        let collapsed = self.todo_group_collapsed.contains(&key);
+        d.push(DisplayRow::TodoHeader { key, label, count, extra });
+        if !collapsed {
+            for ti in group { d.push(DisplayRow::Todo { todo_idx: ti }); }
+        }
+    }
+
     pub fn rebuild_project_map(&mut self) {
         self.project_map = projects::index_by_repo(&self.projects);
     }
@@ -234,6 +314,14 @@ impl HubState {
     pub fn cur_todo_idx(&self) -> Option<usize> {
         match self.display.get(self.cur_di()?)? {
             DisplayRow::Todo { todo_idx } => Some(*todo_idx),
+            _ => None,
+        }
+    }
+    /// The group key of the `TodoHeader` row under the cursor, if any —
+    /// used to toggle that group's collapsed state on Enter/Space.
+    pub fn cur_todo_header_key(&self) -> Option<String> {
+        match self.display.get(self.cur_di()?)? {
+            DisplayRow::TodoHeader { key, .. } => Some(key.clone()),
             _ => None,
         }
     }

@@ -80,6 +80,9 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                         state.todos[ti].status = state.todos[ti].status.cycle();
                         state.todos[ti].touch();
                         let _ = todos::save(&state.todos);
+                        state.rebuild_display();
+                    } else if let Some(key) = state.cur_todo_header_key() {
+                        toggle_todo_group(state, key);
                     }
                 }
                 _ => state.toggle_select(),
@@ -151,7 +154,12 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                         }
                     }
                 }
-                Tab::Todos | Tab::Overview | Tab::Stats | Tab::Activity => {}
+                Tab::Todos => {
+                    if let Some(key) = state.cur_todo_header_key() {
+                        toggle_todo_group(state, key);
+                    }
+                }
+                Tab::Overview | Tab::Stats | Tab::Activity => {}
                 Tab::HubSettings => {
                     match state.hub_settings_cur {
                         0 => {
@@ -248,6 +256,18 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                     }
                 }
             }
+        }
+        KeyCode::Char('s') if state.tab == Tab::Todos => {
+            state.todo_status_view = state.todo_status_view.next();
+            state.rebuild_display();
+        }
+        KeyCode::Char('g') if state.tab == Tab::Todos => {
+            state.todo_group_by = state.todo_group_by.next();
+            state.rebuild_display();
+        }
+        KeyCode::Char('c') if state.tab == Tab::Todos => {
+            state.show_code_todos = !state.show_code_todos;
+            state.rebuild_display();
         }
         KeyCode::Char('s') => {
             if !state.action_targets().is_empty() {
@@ -564,4 +584,12 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
         _ => {}
     }
     None
+}
+
+/// Collapses/expands one Todos-tab group header.
+fn toggle_todo_group(state: &mut HubState, key: String) {
+    if !state.todo_group_collapsed.remove(&key) {
+        state.todo_group_collapsed.insert(key);
+    }
+    state.rebuild_display();
 }

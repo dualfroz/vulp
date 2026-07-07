@@ -122,6 +122,10 @@ pub async fn run_overview_tui(
         editor: cfg.editor.clone(),
         clipboard_cmd: cfg.clipboard_cmd.clone(),
         show_code_todos: false,
+        todo_status_view: Default::default(),
+        todo_group_by:    Default::default(),
+        // Done/Cancelled start collapsed — active work stays front and center.
+        todo_group_collapsed: ["Done", "Cancelled"].into_iter().map(String::from).collect(),
         debug_mode,
         debug_log,
         scan_rx,

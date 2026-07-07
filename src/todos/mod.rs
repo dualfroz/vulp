@@ -70,13 +70,6 @@ pub enum TodoSource {
     CodeScan,
 }
 
-impl TodoSource {
-    /// One-character glyph shown next to a todo's title to mark its origin.
-    pub fn icon(&self) -> &'static str {
-        match self { Self::Manual => "✎", Self::CodeScan => "⌂" }
-    }
-}
-
 /// One todo item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Todo {

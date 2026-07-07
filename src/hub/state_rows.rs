@@ -11,6 +11,11 @@ pub enum DisplayRow {
     Repo    { repo_idx: usize },
     Project { proj_idx: usize },
     Todo    { todo_idx: usize },
+    /// A collapsible group header on the Todos tab. `key` identifies the
+    /// group for collapse-state lookups (`HubState::todo_group_collapsed`);
+    /// `label`/`count`/`extra` are purely for display (`extra` carries e.g.
+    /// "· last 3h ago" on the Done group).
+    TodoHeader { key: String, label: String, count: usize, extra: String },
     Pr      { pr_idx: usize },
     Issue   { issue_idx: usize },
 }

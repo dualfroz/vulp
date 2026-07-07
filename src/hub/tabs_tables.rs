@@ -163,58 +163,72 @@ pub fn render_todos_table(f: &mut Frame, state: &HubState, area: Rect) {
     let avail  = area.height.saturating_sub(1) as usize;
     let cur_di = state.cur_di().unwrap_or(usize::MAX);
 
-    let header = Row::new(vec![" SRC", " STATUS", "TITLE", "REPO", "PROJECT", "EST", "DIFF", "CREATED"])
+    let header = Row::new(vec![" ", "TITLE", "REPO", "PROJECT", "DIFF", "AGE"])
         .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = state.display.iter().enumerate()
         .skip(state.offset).take(avail)
         .filter_map(|(di, row)| {
-            let DisplayRow::Todo { todo_idx: ti } = row else { return None; };
-            let t      = &state.todos[*ti];
             let is_cur = di == cur_di;
-            let status_color = t.status.color();
-            let proj_name = t.project.as_deref().unwrap_or("—");
-            let repo_name = t.repo.as_deref().unwrap_or("—");
-            let created   = format_age_pub(t.created_at);
-            let est_str   = t.estimate.as_deref().unwrap_or("—").chars().take(10).collect::<String>();
-            let diff_str  = match t.difficulty {
-                Some(d) => format!("{}{}", "★".repeat(d.min(5) as usize), "☆".repeat(5usize.saturating_sub(d as usize))),
-                None    => "—".into(),
-            };
-            let title_short: String = if t.source == TodoSource::CodeScan {
-                let raw = &t.title;
-                let trimmed = if let Some(end) = raw.find(']') { raw[end+1..].trim() } else { raw.as_str() };
-                trimmed.chars().take(55).collect()
-            } else {
-                t.title.chars().take(55).collect()
-            };
-            let src_icon = t.source.icon();
-            let src_col  = match t.source { TodoSource::Manual => Color::Cyan, TodoSource::CodeScan => Color::DarkGray };
-            let row_sty  = if is_cur { Style::default().bg(Color::DarkGray) } else { Style::default() };
-            Some(Row::new(vec![
-                Cell::from(format!(" {}", src_icon)).style(Style::default().fg(src_col)),
-                Cell::from(format!(" {} {}", t.status.icon(), t.status.label()))
-                    .style(Style::default().fg(status_color)),
-                Cell::from(title_short),
-                Cell::from(repo_name).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(proj_name).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(est_str).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(diff_str).style(Style::default().fg(Color::Yellow)),
-                Cell::from(created).style(Style::default().fg(Color::DarkGray)),
-            ]).style(row_sty))
+            let row_sty = if is_cur { Style::default().bg(Color::DarkGray) } else { Style::default() };
+            match row {
+                DisplayRow::TodoHeader { label, count, extra, key } => {
+                    let arrow = if state.todo_group_collapsed.contains(key) { "▸" } else { "▾" };
+                    let text = format!("{arrow} {} ── {}{}", label.to_uppercase(), count, extra);
+                    Some(Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(Span::styled(text, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+                        Cell::from(""), Cell::from(""), Cell::from(""), Cell::from(""),
+                    ]).style(row_sty))
+                }
+                DisplayRow::Todo { todo_idx: ti } => {
+                    let t = &state.todos[*ti];
+                    let is_code_scan = t.source == TodoSource::CodeScan;
+                    let (icon, icon_col) = if is_code_scan {
+                        ("⌁", Color::DarkGray)
+                    } else {
+                        (t.status.icon(), t.status.color())
+                    };
+                    let repo_name = t.repo.as_deref().unwrap_or("—");
+                    let proj_name = t.project.as_deref().unwrap_or("—");
+                    let proj_col = t.project.as_deref()
+                        .and_then(|name| state.projects.iter().find(|p| p.name == name))
+                        .map(|p| { let (r, g, b) = crate::projects::hex_to_rgb(&p.color); Color::Rgb(r, g, b) })
+                        .unwrap_or(Color::DarkGray);
+                    let diff_str = match t.difficulty {
+                        Some(d) => "★".repeat(d.min(5) as usize),
+                        None    => "—".into(),
+                    };
+                    let age = format_age_pub(t.updated_at);
+                    let title_short: String = if is_code_scan {
+                        let raw = &t.title;
+                        let trimmed = if let Some(end) = raw.find(']') { raw[end+1..].trim() } else { raw.as_str() };
+                        trimmed.chars().take(55).collect()
+                    } else {
+                        t.title.chars().take(55).collect()
+                    };
+                    Some(Row::new(vec![
+                        Cell::from(icon).style(Style::default().fg(icon_col)),
+                        Cell::from(title_short),
+                        Cell::from(repo_name).style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(proj_name).style(Style::default().fg(proj_col)),
+                        Cell::from(diff_str).style(Style::default().fg(Color::Yellow)),
+                        Cell::from(age).style(Style::default().fg(age_color(t.updated_at))),
+                    ]).style(row_sty))
+                }
+                _ => None,
+            }
         })
         .collect();
 
     f.render_widget(
         Table::new(rows, [
-            Constraint::Length(4),
-            Constraint::Length(14),
+            Constraint::Length(2),
             Constraint::Fill(1),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Length(10),
-            Constraint::Length(7),
-            Constraint::Length(10),
+            Constraint::Length(14),
+            Constraint::Length(14),
+            Constraint::Length(6),
+            Constraint::Length(9),
         ]).header(header),
         area,
     );

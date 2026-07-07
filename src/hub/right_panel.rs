@@ -367,6 +367,13 @@ fn render_right_todo(f: &mut Frame, state: &HubState, area: Rect) {
 
         lines.push(r_kv_color("Status", &format!("{} {}", t.status.icon(), t.status.label()), t.status.color()));
         lines.push(r_kv("Project", t.project.as_deref().unwrap_or("— not assigned"), Color::DarkGray));
+        lines.push(r_kv("Repo", t.repo.as_deref().unwrap_or("— not assigned"), Color::DarkGray));
+        let diff_str = match t.difficulty {
+            Some(d) => "★".repeat(d.min(5) as usize) + &"☆".repeat(5usize.saturating_sub(d as usize)),
+            None    => "—".into(),
+        };
+        lines.push(r_kv("Difficulty", &diff_str, Color::Yellow));
+        lines.push(r_kv("Estimate", t.estimate.as_deref().unwrap_or("—"), Color::DarkGray));
         lines.push(Line::from(""));
 
         if !t.description.is_empty() {
@@ -383,6 +390,8 @@ fn render_right_todo(f: &mut Frame, state: &HubState, area: Rect) {
         lines.push(r_section("Timeline"));
         lines.push(r_kv("Created", &format_age_pub(t.created_at), Color::DarkGray));
         lines.push(r_kv("Updated", &format_age_pub(t.updated_at), Color::DarkGray));
+    } else if state.cur_todo_header_key().is_some() {
+        lines.push(r_dim(" Group header — [↵/Space] expand/collapse".into()));
     } else {
         lines.push(r_dim(" ← select a todo".into()));
     }

@@ -60,10 +60,13 @@ pub static HELP_LINES: &[&str] = &[
     " p            Project menu (create / assign / rename / delete)",
     " +            New todo",
     " e            Edit todo (Todos tab)",
-    " Space        (Todos tab) Cycle todo status",
+    " Space        (Todos tab) Cycle todo status, or expand/collapse a group",
+    " Enter        (Todos tab) Expand/collapse a group header",
+    " s            (Todos tab) Cycle status view: active → open → done → all",
+    " g            (Todos tab) Cycle grouping: status → project → repo → none",
+    " c / X        (Todos tab) Toggle code-scan todos",
     " D / Del      Delete todo or project",
     " T            Scan repos for TODO/FIXME/HACK → import to Todos",
-    " X            (Todos tab) Toggle code-scan todos",
     "",
     "── Help ──────────────────────────────────────",
     " ?            Show this help",
@@ -165,7 +168,16 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
             .constraints([Constraint::Percentage(73), Constraint::Percentage(27)])
             .split(outer[1]);
 
-        let left_blk  = Block::default().borders(Borders::ALL);
+        let mut left_blk = Block::default().borders(Borders::ALL);
+        if state.tab == Tab::Todos {
+            let in_progress = state.todos.iter().filter(|t| t.status == crate::todos::TodoStatus::InProgress).count();
+            let open = state.todos.iter().filter(|t| t.status == crate::todos::TodoStatus::Open).count();
+            left_blk = left_blk.title(format!(
+                " todos · {} in progress · {} open · [s]tatus:{} · [g]roup:{} · [c]ode-scan:{} ",
+                in_progress, open, state.todo_status_view.label(), state.todo_group_by.label(),
+                if state.show_code_todos { "on" } else { "off" },
+            ));
+        }
         let left_inner = left_blk.inner(cols[0]);
         f.render_widget(left_blk, cols[0]);
         state.visible_rows = left_inner.height.saturating_sub(1) as usize;
