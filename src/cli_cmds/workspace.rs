@@ -10,6 +10,7 @@ pub fn list(
     cfg: &AppConfig, json: bool,
     dirty: bool, behind: bool, ahead: bool,
     lang: Option<String>, project: Option<String>, alerts: bool, stale_deploy: bool,
+    no_external: bool, external: bool,
 ) -> Result<()> {
     let mut repos = scan_repos(cfg);
 
@@ -17,6 +18,11 @@ pub fn list(
     if behind { repos.retain(|r| r.behind > 0); }
     if ahead  { repos.retain(|r| r.ahead > 0); }
     if alerts { repos.retain(|r| r.dependabot_open.unwrap_or(0) > 0); }
+    if no_external || external {
+        let ext = crate::stats::cache::load().external_repo_names();
+        if external    { repos.retain(|r|  ext.contains(&r.name)); }
+        if no_external { repos.retain(|r| !ext.contains(&r.name)); }
+    }
     if stale_deploy {
         repos.retain(|r| {
             !matches!(

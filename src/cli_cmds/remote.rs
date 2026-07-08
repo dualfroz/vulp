@@ -398,12 +398,16 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     }
     let _ = crate::cache::save(&cache);
 
-    // Tier-B local measurement (repo size trend) — no network, cheap, only
-    // ever recorded during a refresh (never on a plain read like `vulp status`).
+    // Tier-B local measurements (repo size trend, external-clone classification)
+    // — no network, cheap, only ever recorded during a refresh (never on a
+    // plain read like `vulp status`).
+    let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();
+    let matcher = crate::stats::OwnEmailMatcher::resolve(cfg, &accounts);
     let mut stats_cache = crate::stats::cache::load();
     for r in &repos {
         let size = crate::stats::size::repo_size(&r.path);
         stats_cache.record_size(&r.name, size.git_kb, size.tree_kb);
+        stats_cache.record_authored(&r.name, crate::stats::has_own_commit(&r.path, &matcher));
     }
     let _ = crate::stats::cache::save(&stats_cache);
 

@@ -50,7 +50,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 ```
 vulp scan                                # repo count + dirty/behind/ahead summary
 vulp brief [repo]                        # one-shot picture: state + commits + todos + PR/issues
-vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME] [--alerts] [--stale-deploy]
+vulp list [--dirty] [--behind] [--ahead] [--lang ts] [--project NAME] [--alerts] [--stale-deploy] [--no-external | --external]
 vulp status <repo>                       # branch, dirty, ahead/behind, last commit...
 vulp stats [--period 1d|7d|30d|90d|1y|all]   # commits per repo in period
 vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|commit|license]
@@ -77,6 +77,15 @@ open". `--alerts` filters to repos with `dependabot_open > 0`.
 `deploy_status` is `"in_sync" | "behind:N" | "diverged" | null` — see
 **Deploy drift** below. `--stale-deploy` filters to repos that are `behind`
 or `diverged` (excludes `in_sync` and `null`/not-applicable).
+
+`--no-external` hides vendored/reference clones (repos you have **zero of your
+own commits** in — e.g. an upstream `pterodactyl` you cloned but never pushed
+to); `--external` shows only those. Classification is measured on `vulp refresh`
+(a git-side `--author` scan of your identities, cached in `stats_cache.toml`);
+before the first refresh nothing is classified and both flags match nothing. A
+fork you *do* commit to (even a handful of commits) counts as yours and is not
+external. In the TUI this is the `x` key / the `⧉` marker, and the persistent
+`hide_external_clones` config toggle.
 
 ## Deploy drift
 

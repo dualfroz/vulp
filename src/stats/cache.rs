@@ -19,6 +19,12 @@ pub struct SizeSample {
 pub struct RepoStatsEntry {
     #[serde(default)]
     pub size_samples: Vec<SizeSample>,
+    /// Whether you've ever committed here (`stats::has_own_commit`), measured
+    /// on `[R]`. `Some(false)` = a vendored/reference clone you've never
+    /// touched; `Some(true)` = yours; `None` = not yet measured or no identity
+    /// configured. Drives the external-clone marker and the hide-clones filter.
+    #[serde(default)]
+    pub authored: Option<bool>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -60,5 +66,19 @@ impl StatsCache {
     #[allow(dead_code)]
     pub fn latest_size(&self, repo: &str) -> Option<&SizeSample> {
         self.repos.get(repo).and_then(|e| e.size_samples.last())
+    }
+
+    /// Records whether `repo` has any of your own commits.
+    pub fn record_authored(&mut self, repo: &str, authored: Option<bool>) {
+        self.repos.entry(repo.to_string()).or_default().authored = authored;
+    }
+
+    /// Repo names classified as external/vendored clones — ones measured on a
+    /// past `[R]` to have zero of your commits.
+    pub fn external_repo_names(&self) -> std::collections::HashSet<String> {
+        self.repos.iter()
+            .filter(|(_, e)| e.authored == Some(false))
+            .map(|(n, _)| n.clone())
+            .collect()
     }
 }

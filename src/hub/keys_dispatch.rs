@@ -369,6 +369,18 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
         KeyCode::Char('d') => { state.filter_dirty  = !state.filter_dirty;  state.rebuild_display(); }
         KeyCode::Char('b') => { state.filter_behind = !state.filter_behind; state.rebuild_display(); }
         KeyCode::Char('f') => { state.filter_ahead  = !state.filter_ahead;  state.rebuild_display(); }
+        KeyCode::Char('x') => {
+            state.cfg.hide_external_clones = !state.cfg.hide_external_clones;
+            let _ = crate::config::save_config(&state.cfg);
+            let n = state.external_repos.len();
+            state.status_msg = Some(if state.cfg.hide_external_clones {
+                if n == 0 { "Hiding external clones (none classified yet — run [R])".into() }
+                else { format!("Hiding {} external clone(s)", n) }
+            } else {
+                "Showing external clones".into()
+            });
+            state.rebuild_display();
+        }
         KeyCode::Char('/') => {
             state.filtering = true;
             state.filter_text.clear();
@@ -397,6 +409,7 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                     format!("[{}] Show behind only", chk(state.filter_behind)),
                     format!("[{}] Show ahead only",  chk(state.filter_ahead)),
                     format!("[{}] Show archived",    chk(state.filter_archived)),
+                    format!("[{}] Hide external clones", chk(state.cfg.hide_external_clones)),
                     "    Reset all".into(),
                 ],
                 cursor: 0,

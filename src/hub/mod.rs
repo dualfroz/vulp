@@ -109,6 +109,7 @@ pub async fn run_overview_tui(
         selected: HashSet::new(),
         filter_dirty: false, filter_behind: false, filter_ahead: false,
         filter_archived: false,
+        external_repos: crate::stats::cache::load().external_repo_names(),
         filter_text: String::new(), filtering: false,
         sort_mode: SortMode::Default,
         bookmarks,

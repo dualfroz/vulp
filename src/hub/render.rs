@@ -28,12 +28,13 @@ pub static HELP_LINES: &[&str] = &[
     " q / Esc      Quit (or clear active filter)",
     "",
     "── Filtering & Sorting ───────────────────────",
-    " /            Fuzzy filter repos (name, branch, owner, lang)",
+    " /            Fuzzy filter repos (↑↓ move · Enter open · Esc clear)",
     " S            Sort & filter menu",
     " d            Toggle: show only dirty repos",
     " b            Toggle: show only behind repos",
     " f            Toggle: show only ahead repos",
     " a            Toggle: show archived repos (no commits >90d)",
+    " x            Toggle: hide external clones (⧉ — zero of your commits)",
     " *            Select repos by condition",
     " Ctrl+A       Select / deselect all visible repos",
     "",
@@ -150,6 +151,12 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     } else if state.filtering {
         top_spans.push(Span::styled("[/: _] ", active_filter_style));
     }
+    if state.tab == Tab::Repos && state.cfg.hide_external_clones && !state.external_repos.is_empty() {
+        top_spans.push(Span::styled(
+            format!("[⧉ {} hidden] ", state.external_repos.len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     top_spans.push(Span::styled(health_str, Style::default().fg(health_col)));
     top_spans.push(Span::styled(pos_str, Style::default().fg(Color::DarkGray)));
@@ -225,7 +232,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
             ]
         } else if state.filtering {
             vec![
-                Line::from(vec![Span::styled("  type to filter", dim), sep(), key("Enter"), Span::styled("lock  ", dim), key("Esc"), Span::styled("clear", dim)]),
+                Line::from(vec![Span::styled("  type to filter", dim), sep(), key("↑↓"), Span::styled("move  ", dim), key("Enter"), Span::styled("open  ", dim), key("Esc"), Span::styled("clear", dim)]),
                 Line::from(""),
                 Line::from(""),
             ]

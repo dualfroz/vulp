@@ -26,6 +26,10 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 7 => state.filter_ahead    = !state.filter_ahead,
                 8 => state.filter_archived = !state.filter_archived,
                 9 => {
+                    state.cfg.hide_external_clones = !state.cfg.hide_external_clones;
+                    let _ = crate::config::save_config(&state.cfg);
+                }
+                10 => {
                     state.sort_mode      = SortMode::Default;
                     state.filter_dirty   = false;
                     state.filter_behind  = false;

@@ -62,6 +62,11 @@ pub struct AppConfig {
     /// paths past these two roots are identical). Empty = feature disabled.
     #[serde(default)]
     pub deploy_root:         String,
+    /// Hide vendored/reference clones (repos with zero of your own commits,
+    /// classified on `[R]`) from the Repos list. A durable preference rather
+    /// than a transient filter, so it lives here and not in the session file.
+    #[serde(default)]
+    pub hide_external_clones: bool,
 }
 
 fn default_license_kind() -> String { "mit".into() }
@@ -104,6 +109,7 @@ impl Default for AppConfig {
             stats_author_emails: vec![],
             deploy_ssh_cmd:     String::new(),
             deploy_root:        String::new(),
+            hide_external_clones: false,
         }
     }
 }
@@ -133,6 +139,7 @@ impl AppConfig {
             ("stats_author_emails", self.stats_author_emails.join(", ")),
             ("deploy_ssh_cmd",     self.deploy_ssh_cmd.clone()),
             ("deploy_root",        self.deploy_root.clone()),
+            ("hide_external_clones", self.hide_external_clones.to_string()),
         ]
     }
 
@@ -172,6 +179,7 @@ impl AppConfig {
             }
             "deploy_ssh_cmd"     => self.deploy_ssh_cmd     = value,
             "deploy_root"        => self.deploy_root        = value,
+            "hide_external_clones" => self.hide_external_clones = value == "true",
             "workspace_groups"   => {
                 self.workspace_groups = value
                     .split(',')

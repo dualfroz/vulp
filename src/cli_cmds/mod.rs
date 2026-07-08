@@ -27,8 +27,8 @@ pub(crate) struct Guard {
 /// `Config`/`Auth`/the bare TUI (those keep their existing paths in `app.rs`).
 pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Result<()> {
     match cmd {
-        Commands::List { dirty, behind, ahead, lang, project, alerts, stale_deploy } =>
-            workspace::list(cfg, json, dirty, behind, ahead, lang, project, alerts, stale_deploy),
+        Commands::List { dirty, behind, ahead, lang, project, alerts, stale_deploy, no_external, external } =>
+            workspace::list(cfg, json, dirty, behind, ahead, lang, project, alerts, stale_deploy, no_external, external),
         Commands::Status { repo }   => workspace::status(cfg, json, &repo),
         Commands::Scan              => workspace::scan_cmd(cfg, json),
         Commands::Sync { repos, all, project, action, message, allow_secrets } =>

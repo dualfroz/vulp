@@ -859,10 +859,12 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             // network, cheap (~0.2s/50 repos measured), so a plain sequential
             // pass is fine. Only run during `[R]`, never on tab entry.
             let _ = tx.send(RefreshMsg::Progress("Measuring release cadence + repo size...".into()));
+            let matcher = crate::stats::OwnEmailMatcher::resolve(&cfg, &accounts);
             let mut stats_cache = crate::stats::cache::load();
             for (name, path) in &repo_paths {
                 let size = crate::stats::size::repo_size(path);
                 stats_cache.record_size(name, size.git_kb, size.tree_kb);
+                stats_cache.record_authored(name, crate::stats::has_own_commit(path, &matcher));
             }
             let _ = crate::stats::cache::save(&stats_cache);
 

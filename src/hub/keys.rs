@@ -231,7 +231,26 @@ pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -
                         state.filter_text.clear();
                         state.rebuild_display();
                     }
-                    KeyCode::Enter => { state.filtering = false; }
+                    // Live navigation while the search box is open: arrows move
+                    // the highlight through the filtered results so you can pick
+                    // one without first "locking" the filter (j/k stay literal
+                    // filter input). Enter opens whatever is highlighted.
+                    KeyCode::Down => state.scroll_down(),
+                    KeyCode::Up   => state.scroll_up(),
+                    KeyCode::Enter => match state.tab {
+                        Tab::Repos | Tab::Projects
+                            if state.cur_repo_idx().is_some() || state.cur_proj_idx().is_some() =>
+                        {
+                            // Open the highlighted repo/project directly, keeping
+                            // the filter text applied for when we come back.
+                            state.filtering = false;
+                            state.open_detail = true;
+                            return Ok(PhaseResult::OpenDetail);
+                        }
+                        // Nothing openable under the cursor: just lock the filter
+                        // (exit typing, keep the text) so the full keymap works.
+                        _ => state.filtering = false,
+                    },
                     KeyCode::Backspace => {
                         state.filter_text.pop();
                         state.rebuild_display();

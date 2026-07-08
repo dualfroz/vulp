@@ -55,6 +55,11 @@ pub struct HubState {
     pub filter_text:    String,
     pub filtering:      bool,
     pub filter_archived:bool,
+    /// Repo names classified as vendored/reference clones (zero of your own
+    /// commits), loaded from `stats_cache` at startup and refreshed on `[R]`.
+    /// Hidden from the Repos list when `cfg.hide_external_clones` is set;
+    /// always shown with a dim `⧉` marker.
+    pub external_repos: HashSet<String>,
     pub sort_mode:      SortMode,
     pub bookmarks:      HashSet<PathBuf>,
     pub pins:           HashSet<PathBuf>,
@@ -137,6 +142,7 @@ pub struct HubState {
 impl HubState {
     pub fn passes_filter(&self, ri: usize) -> bool {
         let r = &self.repos[ri];
+        if self.cfg.hide_external_clones && self.external_repos.contains(&r.name) { return false; }
         if    (self.filter_dirty  && !r.is_dirty)
            || (self.filter_behind && r.behind == 0)
            || (self.filter_ahead  && r.ahead  == 0) { return false; }

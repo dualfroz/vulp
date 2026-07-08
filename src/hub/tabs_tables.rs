@@ -45,7 +45,10 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
             let a_str = if r.ahead  > 0 { format!("+{}", r.ahead)  } else { String::new() };
             let b_str = if r.behind > 0 { format!("-{}", r.behind) } else { String::new() };
             let status_str = format!("{} {}{}", d_sym, a_str, b_str);
-            let name_col = if is_cur || (!r.is_dirty && r.ahead == 0 && r.behind == 0) {
+            let is_external = state.external_repos.contains(&r.name);
+            let name_col = if is_external {
+                Color::DarkGray
+            } else if is_cur || (!r.is_dirty && r.ahead == 0 && r.behind == 0) {
                 Color::White
             } else {
                 Color::Yellow
@@ -85,7 +88,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
 
             Some(Row::new(vec![
                 Cell::from(format!("{} {}", if is_cur { "▶" } else { " " }, if is_sel { "[✓]" } else { "[ ]" })).style(check_sty),
-                Cell::from(format!("{}{}", prefix, r.name)).style(Style::default().fg(name_col)),
+                Cell::from(format!("{}{}{}", prefix, if is_external { "⧉ " } else { "" }, r.name)).style(Style::default().fg(name_col)),
                 Cell::from(r.branch.chars().take(9).collect::<String>()),
                 Cell::from(proj_name.chars().take(21).collect::<String>()).style(Style::default().fg(proj_color)),
                 Cell::from(vis).style(match vis { "public" => Style::default().fg(Color::Green), "private" => Style::default().fg(Color::Yellow), _ => Style::default().fg(Color::DarkGray) }),

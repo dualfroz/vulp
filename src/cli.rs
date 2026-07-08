@@ -51,6 +51,10 @@ pub enum Commands {
         #[arg(long)] alerts: bool,
         /// Only repos whose deploy host is behind or diverged (needs deploy_ssh_cmd/deploy_root configured)
         #[arg(long)] stale_deploy: bool,
+        /// Hide vendored/reference clones — repos with zero of your own commits (classified on refresh)
+        #[arg(long)] no_external: bool,
+        /// Only vendored/reference clones — repos with zero of your own commits
+        #[arg(long)] external: bool,
     },
     /// Detailed status of one repo
     Status { repo: String },

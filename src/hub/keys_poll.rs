@@ -161,6 +161,10 @@ pub fn poll_refresh(state: &mut HubState) {
     state.issues = cache.all_issues().into_iter().cloned().collect();
     if closed_counts.is_some() { state.closed_counts = closed_counts; }
 
+    // The refresh thread just re-measured external-clone classification into
+    // stats_cache — pick up the fresh set so the marker/hide filter reflect it.
+    state.external_repos = crate::stats::cache::load().external_repo_names();
+
     state.refresh_rx = None;
     state.status_msg = Some(format!(
         "Refreshed {} repos: {} PRs, {} issues", fetched_meta, fetched_prs, fetched_iss
