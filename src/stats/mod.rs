@@ -99,7 +99,10 @@ pub fn scan_repo_own_commits(path: &std::path::Path, matcher: &OwnEmailMatcher) 
     let Some(regex) = matcher.author_regex() else { return vec![] };
     let out = std::process::Command::new("git")
         .arg("-C").arg(path)
-        .args(["log", "--branches", "-i", &format!("--author={regex}")])
+        // `-E`: `author_regex()` emits an extended-regex alternation (`a|b`);
+        // git's `--author` defaults to *basic* regex, where `|` is a literal
+        // and the pattern silently matches nothing — so this must be explicit.
+        .args(["log", "--branches", "-E", "-i", &format!("--author={regex}")])
         .args(["--date=format-local:%Y-%m-%dT%H", "--pretty=format:%ae\x1f%ad"])
         .output();
     let Ok(out) = out else { return vec![] };
@@ -111,6 +114,28 @@ pub fn scan_repo_own_commits(path: &std::path::Path, matcher: &OwnEmailMatcher) 
         let hour: u32 = hour_s.parse().ok()?;
         Some(OwnCommit { date, hour })
     }).collect()
+}
+
+/// Whether you've ever committed to the repo at `path`. A workspace clone
+/// you've never touched — a vendored/reference fork like an upstream
+/// `pterodactyl` — returns `Some(false)`; that's the signal used to mark and
+/// optionally hide such repos. Uses the same git-side `--author` filter as
+/// the stats scan with `--max-count=1`, so repos where you *do* have commits
+/// short-circuit on the first match and only a true zero-match clone walks
+/// its full history. `None` when no identity is configured (can't tell — the
+/// caller then treats the repo as yours).
+pub fn has_own_commit(path: &std::path::Path, matcher: &OwnEmailMatcher) -> Option<bool> {
+    let regex = matcher.author_regex()?;
+    let out = std::process::Command::new("git")
+        .arg("-C").arg(path)
+        // `-E` for the same reason as `scan_repo_own_commits`: the regex is an
+        // extended-regex alternation that git's default basic-regex `--author`
+        // would treat as a literal `|` and never match.
+        .args(["log", "--branches", "-E", "-i", &format!("--author={regex}"), "--max-count=1", "--format=%H"])
+        .output()
+        .ok()?;
+    // `--format=%H` prints "<sha>\n" on a match, nothing at all on none.
+    Some(out.stdout.iter().any(|b| !b.is_ascii_whitespace()))
 }
 
 /// Scans every repo and merges the result into one date-sorted list.
