@@ -78,6 +78,14 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
             };
             let stars_str = r.stars.map(|s| format!("{}", s)).unwrap_or_else(|| "—".into());
             let stars_col = if r.stars.is_some() { Color::Yellow } else { Color::DarkGray };
+            // Active branch, plus `+N` when the repo keeps other local
+            // branches (e.g. a theme per branch) — so the count is visible
+            // without opening the Branches tab.
+            let branch_cell = if r.branch_count > 1 {
+                format!("{} +{}", r.branch.chars().take(9).collect::<String>(), r.branch_count - 1)
+            } else {
+                r.branch.chars().take(13).collect::<String>()
+            };
             let is_pinned = state.pins.contains(&r.path);
             let prefix = match (is_pinned, r.bookmarked) {
                 (true, true)  => "◆★",
@@ -89,7 +97,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
             Some(Row::new(vec![
                 Cell::from(format!("{} {}", if is_cur { "▶" } else { " " }, if is_sel { "[✓]" } else { "[ ]" })).style(check_sty),
                 Cell::from(format!("{}{}{}", prefix, if is_external { "⧉ " } else { "" }, r.name)).style(Style::default().fg(name_col)),
-                Cell::from(r.branch.chars().take(9).collect::<String>()),
+                Cell::from(branch_cell).style(Style::default().fg(if r.branch_count > 1 { Color::Cyan } else { Color::Reset })),
                 Cell::from(proj_name.chars().take(21).collect::<String>()).style(Style::default().fg(proj_color)),
                 Cell::from(vis).style(match vis { "public" => Style::default().fg(Color::Green), "private" => Style::default().fg(Color::Yellow), _ => Style::default().fg(Color::DarkGray) }),
                 Cell::from(r.last_commit_age.clone()).style(Style::default().fg(age_color(r.last_commit_ts))),
@@ -107,7 +115,7 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
     let widths = [
         Constraint::Length(6),
         Constraint::Fill(1),
-        Constraint::Length(10),
+        Constraint::Length(14),
         Constraint::Length(22),
         Constraint::Length(9),
         Constraint::Length(9),

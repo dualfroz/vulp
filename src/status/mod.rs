@@ -28,6 +28,10 @@ pub struct RepoSummary {
     pub last_commit_ts:  i64,
     pub last_tag:        Option<String>,
     pub visibility:      Option<String>,
+    /// Number of local branches. Surfaced in the Repos table as `+N` next to
+    /// the active branch so a repo that keeps several branches (e.g. one theme
+    /// per branch) shows its branch count at a glance, not just the checkout.
+    pub branch_count:    usize,
     pub owner:           Option<String>,  // parsed from git remote URL
     /// The provider-side repo name parsed from the git remote URL — not
     /// necessarily the local folder name (see `parse_repo_name_from_url`).
@@ -404,6 +408,8 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
 
     let owner   = extract_owner(&repo);
     let remote_repo_name = extract_remote_repo_name(&repo);
+    let branch_count = repo.branches(Some(git2::BranchType::Local))
+        .map(|bs| bs.count()).unwrap_or(0);
     let has_license = detect_license(path);
 
     let t_lang = std::time::Instant::now();
@@ -431,7 +437,7 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     Ok(RepoSummary {
         name, path: path.to_path_buf(), branch, ahead, behind, is_dirty,
         last_commit_msg: msg, last_commit_age: age, last_commit_ts: ts,
-        last_tag, visibility: None, owner, remote_repo_name, has_license, lang, bookmarked: false,
+        last_tag, visibility: None, branch_count, owner, remote_repo_name, has_license, lang, bookmarked: false,
         stars: None, open_issues: None, open_prs: None,
         stash_count,
         ci_status: None, dependabot_open: None, deploy_status: None,

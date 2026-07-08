@@ -92,7 +92,8 @@ pub fn status(cfg: &AppConfig, json: bool, repo: &str) -> Result<()> {
     }
     println!("name:        {}", r.name);
     println!("path:        {}", r.path.display());
-    println!("branch:      {}", r.branch);
+    println!("branch:      {}{}", r.branch,
+        if r.branch_count > 1 { format!("  (+{} more local)", r.branch_count - 1) } else { String::new() });
     println!("dirty:       {}", r.is_dirty);
     println!("ahead:       {}", r.ahead);
     println!("behind:      {}", r.behind);
