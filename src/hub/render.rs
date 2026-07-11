@@ -105,6 +105,10 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     };
     let health_col = if behind_c > 0 { Color::Red } else if dirty_c > 0 { Color::Yellow } else { Color::Green };
 
+    let todo_active = state.todos.iter()
+        .filter(|t| matches!(t.status, crate::todos::TodoStatus::Open | crate::todos::TodoStatus::InProgress))
+        .count();
+    let todo_badge  = if todo_active > 0        { format!("4 Todos({})",  todo_active)        } else { "4 Todos".into() };
     let pr_badge    = if !state.prs.is_empty()    { format!("5 PRs({})",    state.prs.len())    } else { "5 PRs".into() };
     let issue_badge = if !state.issues.is_empty() { format!("6 Issues({})", state.issues.len()) } else { "6 Issues".into() };
 
@@ -116,7 +120,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         Span::raw(" "),
         tab_span("3 Projects",    state.tab == Tab::Projects),
         Span::raw(" "),
-        tab_span("4 Todos",       state.tab == Tab::Todos),
+        tab_span(&todo_badge,     state.tab == Tab::Todos),
         Span::raw(" "),
         tab_span(&pr_badge,       state.tab == Tab::PRs),
         Span::raw(" "),
@@ -179,11 +183,7 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         if state.tab == Tab::Todos {
             let in_progress = state.todos.iter().filter(|t| t.status == crate::todos::TodoStatus::InProgress).count();
             let open = state.todos.iter().filter(|t| t.status == crate::todos::TodoStatus::Open).count();
-            left_blk = left_blk.title(format!(
-                " todos · {} in progress · {} open · [s]tatus:{} · [g]roup:{} · [c]ode-scan:{} ",
-                in_progress, open, state.todo_status_view.label(), state.todo_group_by.label(),
-                if state.show_code_todos { "on" } else { "off" },
-            ));
+            left_blk = left_blk.title(format!(" todos · {} in progress · {} open ", in_progress, open));
         }
         let left_inner = left_blk.inner(cols[0]);
         f.render_widget(left_blk, cols[0]);
@@ -210,7 +210,9 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         let key = |k: &str| Span::styled(format!("[{}] ", k), dim);
         let sep = || Span::styled("  ", dim);
 
-        // Contextual line 3: scan progress or selection hint.
+        // Contextual line 3: scan progress, selection hint, or (on the Todos
+        // tab) the current view/group state plus the keys that change it —
+        // moved here out of the panel title, which read as clutter.
         let line3 = if state.scan_rx.is_some() {
             Line::from(Span::styled("  scanning repositories…", dim))
         } else if !state.selected.is_empty() {
@@ -219,6 +221,15 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
                 Span::styled("  — ", dim),
                 key("s"), Span::styled("sync  ", dim),
                 key("r"), Span::styled("release", dim),
+            ])
+        } else if state.tab == Tab::Todos {
+            let cyn = Style::default().fg(Color::Cyan);
+            Line::from(vec![
+                Span::styled("  view ", dim), Span::styled(state.todo_status_view.label(), cyn),
+                Span::styled("  ·  group ", dim), Span::styled(state.todo_group_by.label(), cyn),
+                Span::styled("  ·  code-scan ", dim), Span::styled(if state.show_code_todos { "on" } else { "off" }, cyn),
+                Span::styled("   —   ", dim),
+                key("s"), Span::styled("view  ", dim), key("g"), Span::styled("group  ", dim), key("c"), Span::styled("code-scan", dim),
             ])
         } else {
             Line::from("")
