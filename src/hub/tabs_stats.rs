@@ -149,10 +149,9 @@ pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {
     use ratatui::widgets::{Block, Borders};
     let dim = Style::default().fg(Color::DarkGray);
     let yel = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    let wht = Style::default().fg(Color::White);
 
     let filter_label = state.activity_filter.map(|k| k.label()).unwrap_or("all");
-    let title = format!(" activity — filter: {} ", filter_label);
+    let title = format!(" activity — filter: {}  ·  [↑↓] move  [Enter] open repo  [f] filter ", filter_label);
     let blk = Block::default().borders(Borders::ALL)
         .title(Span::styled(title, yel))
         .title_alignment(Alignment::Center)
@@ -160,50 +159,67 @@ pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {
     let inner = blk.inner(area);
     f.render_widget(blk, area);
 
-    let Some(feed) = &state.activity_feed else {
+    if state.activity_feed.is_none() {
         let msg = if state.activity_rx.is_some() { " Loading activity..." } else { " Press [Tab] or re-enter this tab to load activity" };
         f.render_widget(Paragraph::new(Line::from(Span::styled(msg, dim))), inner);
         return;
-    };
+    }
 
-    let filtered: Vec<&crate::activity::ActivityEntry> = feed.iter()
-        .filter(|e| state.activity_filter.map(|k| k == e.kind).unwrap_or(true))
-        .collect();
-
-    let max_rows = inner.height.saturating_sub(1) as usize;
-    let detail_w = (inner.width as usize).saturating_sub(36).max(10);
-    let header = Row::new(vec![
-        Cell::from("TIMESTAMP").style(dim), Cell::from("KIND").style(dim),
-        Cell::from("REPO").style(dim), Cell::from("DETAIL").style(dim),
-    ]);
-    let rows: Vec<Row> = filtered.iter().take(max_rows).map(|e| {
-        let kind_col = match e.kind {
-            crate::activity::ActivityKind::Commit  => Style::default().fg(Color::White),
-            crate::activity::ActivityKind::Push     | crate::activity::ActivityKind::Pull => Style::default().fg(Color::Cyan),
-            crate::activity::ActivityKind::Release  => Style::default().fg(Color::Green),
-            crate::activity::ActivityKind::NewRepo  => Style::default().fg(Color::Magenta),
-            crate::activity::ActivityKind::Todo     => Style::default().fg(Color::Yellow),
-            crate::activity::ActivityKind::Pr       => Style::default().fg(Color::Cyan),
-            crate::activity::ActivityKind::Issue    => Style::default().fg(Color::Yellow),
-            crate::activity::ActivityKind::License  => Style::default().fg(Color::Magenta),
-        };
-        let detail = e.detail.chars().take(detail_w).collect::<String>();
-        Row::new(vec![
-            Cell::from(format_age_pub(e.ts)).style(dim),
-            Cell::from(e.kind.label()).style(kind_col),
-            Cell::from(e.repo.chars().take(18).collect::<String>()).style(wht),
-            Cell::from(detail).style(Style::default().fg(Color::Gray)),
-        ])
-    }).collect();
-
-    if rows.is_empty() {
+    let filtered = state.activity_filtered();
+    if filtered.is_empty() {
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no activity recorded yet", dim))), inner);
         return;
     }
 
+    // Keep the cursor in range and scroll a window around it.
+    let max_rows = (inner.height.saturating_sub(1) as usize).max(1);
+    let cursor   = state.activity_cursor.min(filtered.len() - 1);
+    let offset   = if cursor >= max_rows { cursor - max_rows + 1 } else { 0 };
+    let repo_w   = 34usize;
+    let detail_w = (inner.width as usize).saturating_sub(20 + 10 + repo_w + 4).max(10);
+
+    let header = Row::new(vec![
+        Cell::from(" WHEN").style(dim), Cell::from("KIND").style(dim),
+        Cell::from("REPO").style(dim), Cell::from("DETAIL").style(dim),
+    ]);
+    let rows: Vec<Row> = filtered.iter().enumerate().skip(offset).take(max_rows).map(|(i, e)| {
+        let is_cur = i == cursor;
+        let kind_col = match e.kind {
+            crate::activity::ActivityKind::Commit  => Color::White,
+            crate::activity::ActivityKind::Push    => Color::Green,
+            crate::activity::ActivityKind::Pull    => Color::Cyan,
+            crate::activity::ActivityKind::Release  => Color::LightGreen,
+            crate::activity::ActivityKind::NewRepo  => Color::Magenta,
+            crate::activity::ActivityKind::Todo     => Color::Yellow,
+            crate::activity::ActivityKind::Pr       => Color::LightCyan,
+            crate::activity::ActivityKind::Issue    => Color::LightYellow,
+            crate::activity::ActivityKind::License  => Color::Blue,
+        };
+        // Precise local timestamp + relative age, instead of age alone.
+        let when = chrono::DateTime::from_timestamp(e.ts, 0)
+            .map(|d| d.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "—".into());
+        // Colour the repo by its project, matching the Repos table; the ›
+        // marks it as a jump target.
+        let repo_ri  = state.repos.iter().position(|r| r.name == e.repo);
+        let repo_col = repo_ri.and_then(|ri| state.repo_proj_color(ri)).unwrap_or(Color::White);
+        let repo_txt = format!("{}{}", if repo_ri.is_some() { "› " } else { "  " },
+            e.repo.chars().take(repo_w - 2).collect::<String>());
+        let detail = e.detail.chars().take(detail_w).collect::<String>();
+        let mark = if is_cur { "▶ " } else { "  " };
+        let row = Row::new(vec![
+            Cell::from(format!("{}{}", mark, when)).style(Style::default().fg(if is_cur { Color::White } else { Color::Gray })),
+            Cell::from(e.kind.label()).style(Style::default().fg(kind_col).add_modifier(Modifier::BOLD)),
+            Cell::from(repo_txt).style(Style::default().fg(repo_col)),
+            Cell::from(format!("{}  {}", detail, format_age_pub(e.ts))).style(dim),
+        ]);
+        if is_cur { row.style(Style::default().bg(Color::Rgb(40, 40, 55))) } else { row }
+    }).collect();
+
     f.render_widget(
         Table::new(rows, [
-            Constraint::Length(9), Constraint::Length(9), Constraint::Length(18), Constraint::Fill(1),
+            Constraint::Length(20), Constraint::Length(10),
+            Constraint::Length(repo_w as u16), Constraint::Fill(1),
         ]).header(header),
         inner,
     );

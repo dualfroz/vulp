@@ -142,6 +142,7 @@ pub async fn run_overview_tui(
         activity_feed: None,
         activity_rx: None,
         activity_filter: None,
+        activity_cursor: 0,
         vulp_log: Vec::new(),
         pending_cursor_restore: None,
         hub_settings_cur: 0,

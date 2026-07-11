@@ -28,6 +28,8 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
         KeyCode::Up   | KeyCode::Char('k') => {
             if state.tab == Tab::HubSettings {
                 state.hub_settings_cur = state.hub_settings_cur.saturating_sub(1);
+            } else if state.tab == Tab::Activity {
+                state.activity_cursor = state.activity_cursor.saturating_sub(1);
             } else {
                 state.scroll_up();
             }
@@ -36,6 +38,9 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
             if state.tab == Tab::HubSettings {
                 let max = 10 + 1 + state.templates.len();
                 if state.hub_settings_cur + 1 < max { state.hub_settings_cur += 1; }
+            } else if state.tab == Tab::Activity {
+                let n = state.activity_filtered().len();
+                if n > 0 && state.activity_cursor + 1 < n { state.activity_cursor += 1; }
             } else {
                 state.scroll_down();
             }
@@ -100,7 +105,7 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                 Tab::Activity    => Tab::HubSettings,
                 Tab::HubSettings => Tab::Overview,
             };
-            state.cursor = 0; state.offset = 0; state.selected.clear();
+            state.cursor = 0; state.offset = 0; state.activity_cursor = 0; state.selected.clear();
             state.rebuild_display();
             super::keys::maybe_load_global_stats(state);
             super::keys::maybe_load_activity(state);
@@ -117,7 +122,7 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                 Tab::Activity    => Tab::Stats,
                 Tab::HubSettings => Tab::Activity,
             };
-            state.cursor = 0; state.offset = 0; state.selected.clear();
+            state.cursor = 0; state.offset = 0; state.activity_cursor = 0; state.selected.clear();
             state.rebuild_display();
             super::keys::maybe_load_global_stats(state);
             super::keys::maybe_load_activity(state);
@@ -159,7 +164,23 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                         toggle_todo_group(state, key);
                     }
                 }
-                Tab::Overview | Tab::Stats | Tab::Activity => {}
+                Tab::Activity => {
+                    // Jump from an activity row to that repo: switch to the
+                    // Repos tab focused on it and open its detail.
+                    if let Some(ri) = state.activity_repo_at_cursor() {
+                        state.tab = Tab::Repos;
+                        state.rebuild_display();
+                        if let Some(pos) = state.display.iter().position(|row|
+                            matches!(row, DisplayRow::Repo { repo_idx } if *repo_idx == ri)) {
+                            state.cursor = pos;
+                        }
+                        state.open_detail = true;
+                        return Some(PhaseResult::OpenDetail);
+                    } else {
+                        state.status_msg = Some("That repo isn't in the workspace".into());
+                    }
+                }
+                Tab::Overview | Tab::Stats => {}
                 Tab::HubSettings => {
                     match state.hub_settings_cur {
                         0 => {
@@ -321,6 +342,7 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                     if idx + 1 < cycle.len() { Some(cycle[idx + 1]) } else { None }
                 }
             };
+            state.activity_cursor = 0;
         }
         KeyCode::Char('p') => {
             let mut opts = vec!["Create project".to_string()];

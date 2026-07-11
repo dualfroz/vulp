@@ -187,7 +187,15 @@ pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -
             }
 
             if let Some(Event::Mouse(m)) = &event {
+                let on_activity = state.tab == Tab::Activity;
                 match m.kind {
+                    MouseEventKind::ScrollDown if on_activity => {
+                        let n = state.activity_filtered().len();
+                        if n > 0 && state.activity_cursor + 1 < n { state.activity_cursor += 1; }
+                    }
+                    MouseEventKind::ScrollUp   if on_activity => {
+                        state.activity_cursor = state.activity_cursor.saturating_sub(1);
+                    }
                     MouseEventKind::ScrollDown => { state.scroll_down(); }
                     MouseEventKind::ScrollUp   => { state.scroll_up(); }
                     _ => {}

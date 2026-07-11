@@ -98,6 +98,8 @@ pub struct HubState {
     pub activity_feed:       Option<Vec<crate::activity::ActivityEntry>>,
     pub activity_rx:         Option<std::sync::mpsc::Receiver<Vec<crate::activity::ActivityEntry>>>,
     pub activity_filter:     Option<crate::activity::ActivityKind>,
+    /// Cursor into the (filtered) Activity feed — the row Enter jumps from.
+    pub activity_cursor:     usize,
     // Overview "vulp log" tile: recent vulp-performed actions, newest first
     pub vulp_log:            Vec<crate::activity::ActivityEntry>,
     /// Repo path to re-focus once the startup scan completes (session restore).
@@ -330,6 +332,25 @@ impl HubState {
             DisplayRow::TodoHeader { key, .. } => Some(key.clone()),
             _ => None,
         }
+    }
+
+    /// The Activity feed narrowed by the active kind filter — the exact list
+    /// the Activity tab renders and `activity_cursor` indexes into.
+    pub fn activity_filtered(&self) -> Vec<&crate::activity::ActivityEntry> {
+        match &self.activity_feed {
+            Some(feed) => feed.iter()
+                .filter(|e| self.activity_filter.map(|k| k == e.kind).unwrap_or(true))
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    /// The workspace repo index the Activity row under the cursor refers to,
+    /// if that repo is still in the workspace — the target of Enter/click.
+    pub fn activity_repo_at_cursor(&self) -> Option<usize> {
+        let feed = self.activity_filtered();
+        let entry = feed.get(self.activity_cursor)?;
+        self.repos.iter().position(|r| r.name == entry.repo)
     }
 
     pub fn project_repos(&self, pi: usize) -> Vec<usize> {
