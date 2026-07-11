@@ -816,6 +816,7 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             .await;
 
             for (name, slug, meta, p, i, ci) in results {
+                let can_merge = meta.as_ref().map(|m| m.viewer_can_merge).unwrap_or(false);
                 if let Some(meta) = meta {
                     let slug_lc = slug.to_lowercase();
                     let dep = dependabot
@@ -837,7 +838,10 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                         fetched_at:      chrono::Utc::now().timestamp(),
                     }));
                 }
-                if let Some(p) = p { prs.push((name.clone(), p)); }
+                if let Some(mut p) = p {
+                    for pr in &mut p { pr.viewer_can_merge = can_merge; }
+                    prs.push((name.clone(), p));
+                }
                 if let Some(i) = i { issues.push((name, i)); }
             }
 

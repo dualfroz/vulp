@@ -52,6 +52,10 @@ pub struct RepoMeta {
     pub stars:        u32,
     pub description:  Option<String>,
     pub topics:       Vec<String>,
+    /// Whether the authenticated user can merge PRs here (write/maintain/admin
+    /// permission). Lets the hub hide PRs it can neither review-merge nor
+    /// learn anything from. Providers that don't expose this leave it false.
+    pub viewer_can_merge: bool,
 }
 
 /// One pull/merge request, as shown in the hub's PRs tab and the repo
@@ -69,6 +73,13 @@ pub struct PrDetail {
     pub url:         String,
     pub draft:       bool,
     pub labels:      Vec<String>,
+    /// Whether you can merge this PR (from the repo's viewer permission,
+    /// stamped at refresh). Combined with `author` it decides relevance:
+    /// the hub shows a PR only when you authored it but can't merge it
+    /// (your contribution elsewhere) or someone else authored it and you
+    /// can (awaiting your review) — never your own PR in your own repo.
+    #[serde(default)]
+    pub viewer_can_merge: bool,
 }
 
 /// One issue, as shown in the hub's Issues tab and the repo detail view's

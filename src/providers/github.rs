@@ -243,12 +243,20 @@ impl Provider for GitHubProvider {
             .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
+        // `permissions` is present only on authenticated requests; write,
+        // maintain or admin all imply the ability to merge PRs.
+        let perms = &v["permissions"];
+        let viewer_can_merge = perms["push"].as_bool().unwrap_or(false)
+            || perms["maintain"].as_bool().unwrap_or(false)
+            || perms["admin"].as_bool().unwrap_or(false);
+
         Ok(RepoMeta {
             open_issues:  v["open_issues_count"].as_u64().unwrap_or(0) as u32,
             open_prs,
             stars:        v["stargazers_count"].as_u64().unwrap_or(0) as u32,
             description,
             topics,
+            viewer_can_merge,
         })
     }
 
@@ -399,6 +407,9 @@ impl Provider for GitHubProvider {
                 url:         pr["html_url"].as_str().unwrap_or("").to_string(),
                 draft:       pr["draft"].as_bool().unwrap_or(false),
                 labels,
+                // Stamped later from the repo's viewer permission (list_pull_requests
+                // has no repo-level permission field); false until then.
+                viewer_can_merge: false,
             }
         }).collect()).unwrap_or_default();
         Ok(prs)

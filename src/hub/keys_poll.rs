@@ -157,7 +157,7 @@ pub fn poll_refresh(state: &mut HubState) {
     for (name, i) in issues { fetched_iss += i.len(); cache.set_issues(&name, i); }
     let _ = crate::cache::save(&cache);
 
-    state.prs    = cache.all_prs().into_iter().cloned().collect();
+    state.prs    = super::actions::relevant_prs(cache.all_prs().into_iter().cloned(), &state.accounts);
     state.issues = cache.all_issues().into_iter().cloned().collect();
     if closed_counts.is_some() { state.closed_counts = closed_counts; }
 

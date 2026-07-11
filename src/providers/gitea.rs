@@ -199,6 +199,10 @@ impl Provider for GiteaProvider {
             stars:        v["stars_count"].as_u64().unwrap_or(0) as u32,
             description:  v["description"].as_str().filter(|s| !s.is_empty()).map(String::from),
             topics:       vec![],
+            viewer_can_merge: {
+                let p = &v["permissions"];
+                p["push"].as_bool().unwrap_or(false) || p["admin"].as_bool().unwrap_or(false)
+            },
         })
     }
 

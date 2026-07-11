@@ -196,6 +196,7 @@ impl Provider for GitLabProvider {
             stars:        v["star_count"].as_u64().unwrap_or(0) as u32,
             description:  v["description"].as_str().filter(|s| !s.is_empty()).map(String::from),
             topics:       v["topics"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect()).unwrap_or_default(),
+            viewer_can_merge: v["permissions"]["project_access"]["access_level"].as_u64().unwrap_or(0) >= 30,
         })
     }
 

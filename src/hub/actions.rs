@@ -11,6 +11,34 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use super::state::HubState;
 
+// ── PR relevance ──────────────────────────────────────────────────────────────
+
+/// Account logins to treat as "you" when deciding PR authorship.
+pub fn account_logins(accounts: &[crate::auth::Account]) -> Vec<String> {
+    accounts.iter().map(|a| a.username.clone()).filter(|u| !u.is_empty()).collect()
+}
+
+/// Whether a PR is worth surfacing in the hub. Shown only when you authored
+/// it but can't merge it yourself (your contribution to a repo you don't
+/// control) or someone else authored it and you can (it's awaiting your
+/// review). Your own PR in a repo you can merge in, and strangers' PRs you
+/// can't act on, are both noise and filtered out. `logins` are your account
+/// usernames; an empty `logins` shows everything (identity unknown).
+pub fn pr_is_relevant(pr: &crate::providers::PrDetail, logins: &[String]) -> bool {
+    if logins.is_empty() { return true; }
+    let mine = logins.iter().any(|u| u.eq_ignore_ascii_case(&pr.author));
+    mine != pr.viewer_can_merge
+}
+
+/// Filters a cached PR list down to the relevant ones (see `pr_is_relevant`).
+pub fn relevant_prs(
+    prs: impl IntoIterator<Item = crate::providers::PrDetail>,
+    accounts: &[crate::auth::Account],
+) -> Vec<crate::providers::PrDetail> {
+    let logins = account_logins(accounts);
+    prs.into_iter().filter(|p| pr_is_relevant(p, &logins)).collect()
+}
+
 // ── sync flow ─────────────────────────────────────────────────────────────────
 
 /// Runs `action` ("pull", "commit_push", or anything else meaning "push")

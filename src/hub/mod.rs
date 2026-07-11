@@ -91,13 +91,17 @@ pub async fn run_overview_tui(
             if r.visibility.is_none() { r.visibility = m.visibility.clone(); }
         }
     }
-    let cached_prs:    Vec<PrDetail>    = meta_cache.all_prs().into_iter().cloned().collect();
-    let cached_issues: Vec<IssueDetail> = meta_cache.all_issues().into_iter().cloned().collect();
-
     let debug_mode = crate::debug::is_enabled();
     let debug_log  = crate::debug::take();
     let accounts   = crate::auth::load_accounts_path(&cfg.data_dir).unwrap_or_default();
     let templates  = load_templates();
+
+    // The cache keeps every PR; the hub only surfaces the ones you can act on
+    // (yours-elsewhere or awaiting-your-review — see actions::pr_is_relevant),
+    // so PRs from repos you merely cloned don't clutter Overview and the tab.
+    let cached_prs:    Vec<PrDetail>    =
+        actions::relevant_prs(meta_cache.all_prs().into_iter().cloned(), &accounts);
+    let cached_issues: Vec<IssueDetail> = meta_cache.all_issues().into_iter().cloned().collect();
 
     let mut state = HubState {
         repos, projects, project_map, todos,
