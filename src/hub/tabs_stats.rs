@@ -22,11 +22,19 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    // LEFT: bar chart or loading
+    // LEFT is split: your author-filtered contribution graph on top, the
+    // period commit bar chart below it.
+    let left_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(13), Constraint::Min(3)])
+        .split(cols[0]);
+    render_own_contributions(f, state, left_rows[0]);
+    let chart_area = left_rows[1];
+
     let mut left_lines: Vec<Line> = vec![];
 
     left_lines.push(Line::from(Span::styled(
-        format!("  Global Statistics  [7:{}]  [p] change period  [d] weekly digest preview", state.global_stats_period.label()),
+        format!("  Global Statistics  [7:{}]  [p] period  [d] digest", state.global_stats_period.label()),
         yel,
     )));
     left_lines.push(Line::from(Span::styled("  ─────────────────────────────────────────────────────────", dim)));
@@ -46,10 +54,10 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
 
             // Simple text bar chart
             let max_count: usize = gs.activity.iter().map(|(_, c)| *c).max().unwrap_or(1).max(1);
-            let bar_h = (area.height as usize).saturating_sub(10).max(5);
+            let bar_h = (chart_area.height as usize).saturating_sub(6).max(4);
             let data = &gs.activity;
             let n = data.len();
-            let bar_w = (cols[0].width as usize).saturating_sub(8).max(1);
+            let bar_w = (chart_area.width as usize).saturating_sub(8).max(1);
             let step = if n > bar_w { (n / bar_w).max(1) } else { 1 };
             let sampled: Vec<&(String, usize)> = data.iter().step_by(step).collect();
             let bar_count = sampled.len().min(bar_w);
@@ -89,7 +97,7 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
         }
     }
 
-    f.render_widget(Paragraph::new(left_lines), cols[0]);
+    f.render_widget(Paragraph::new(left_lines), chart_area);
 
     // RIGHT: language breakdown + top repos
     let mut right_lines: Vec<Line> = vec![];
@@ -143,6 +151,75 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(right_lines), cols[1]);
+}
+
+/// Your author-filtered contribution graph: streak + totals, a GitHub-style
+/// 52-week heatmap, and an hour-of-day histogram. Author-scoped (only commits
+/// by your configured identities), unlike the all-commits chart beside it.
+fn render_own_contributions(f: &mut Frame, state: &HubState, area: Rect) {
+    let dim = Style::default().fg(Color::DarkGray);
+    let yel = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let grn = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+
+    let Some(gs) = &state.global_stats else {
+        f.render_widget(Paragraph::new(Line::from(Span::styled("  Your contributions — loading…", dim))), area);
+        return;
+    };
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled("  Your Contributions", yel)),
+    ];
+
+    if gs.own_total == 0 {
+        lines.push(Line::from(Span::styled(
+            "  no commits matched your identities — set stats_author_emails", dim)));
+        f.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    let (cur, max) = gs.own_streak;
+    lines.push(Line::from(vec![
+        Span::styled("  streak ", dim),
+        Span::styled(format!("{cur}d"), grn),
+        Span::styled(format!("  · longest {max}d"), dim),
+        Span::styled(format!("  · {} commits/yr", gs.own_total), Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(""));
+
+    // 52-week heatmap: 7 rows (Mon..Sun) × one column per week, shaded by count.
+    let hm = &gs.own_heatmap;
+    let weeks = hm.len().div_ceil(7);
+    let day_lbl = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
+    for (row, lbl) in day_lbl.iter().enumerate() {
+        let mut spans = vec![Span::styled(format!("  {:<4}", lbl), dim)];
+        for w in 0..weeks {
+            let c = hm.get(w * 7 + row).map(|(_, c)| *c).unwrap_or(0);
+            let (ch, st) = match c {
+                0      => ("·", dim),
+                1      => ("■", Style::default().fg(Color::Rgb(14, 68, 41))),
+                2..=3  => ("■", Style::default().fg(Color::Rgb(0, 109, 50))),
+                4..=6  => ("■", Style::default().fg(Color::Rgb(38, 166, 65))),
+                _      => ("■", Style::default().fg(Color::Rgb(57, 211, 83))),
+            };
+            spans.push(Span::styled(ch, st));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+
+    // Hour-of-day histogram as a 24-cell sparkline.
+    let hours = &gs.own_hours;
+    let hmax = hours.iter().copied().max().unwrap_or(1).max(1) as usize;
+    let ramp = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let mut hspans = vec![Span::styled("  hours ", dim)];
+    for &h in hours.iter() {
+        let lvl = (h as usize * 8 / hmax).min(8);
+        hspans.push(Span::styled(ramp[lvl].to_string(), Style::default().fg(Color::Cyan)));
+    }
+    hspans.push(Span::styled("  0–23h", dim));
+    lines.push(Line::from(hspans));
+
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {

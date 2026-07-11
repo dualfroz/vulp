@@ -17,6 +17,11 @@ pub struct GlobalStats {
     pub dirty_count:   usize,
     pub behind_count:  usize,
     pub day_pattern:   [usize; 7],            // Mon–Sun commit totals
+    // ── your (author-filtered) contributions, all-time ──
+    pub own_total:     usize,                 // commits authored by you
+    pub own_streak:    (u32, u32),            // (current, longest) day streak
+    pub own_heatmap:   Vec<(chrono::NaiveDate, u32)>, // ~52w daily own-commit counts
+    pub own_hours:     [u32; 24],             // your commits by local hour
 }
 
 /// Progress/result of the background API refresh ([R]): per-repo metadata,

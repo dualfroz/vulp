@@ -24,10 +24,24 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
     let dirty_count  = state.repos.iter().filter(|r| r.is_dirty).count();
     let behind_count = state.repos.iter().filter(|r| r.behind > 0).count();
     let period = state.global_stats_period;
+    let cfg      = state.cfg.clone();
+    let accounts = state.accounts.clone();
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
         use super::state::GlobalStats;
+
+        // Author-filtered "your contributions" — one git scan across the
+        // workspace (cheap since the `-E` fix), independent of the period
+        // selector: streak/heatmap/hours are your whole activity graph.
+        let matcher = crate::stats::OwnEmailMatcher::resolve(&cfg, &accounts);
+        let own_commits: Vec<crate::stats::OwnCommit> = repos_snapshot.iter()
+            .flat_map(|(_, path, _, _, _)| crate::stats::scan_repo_own_commits(path, &matcher))
+            .collect();
+        let own_total   = own_commits.len();
+        let own_streak  = crate::stats::streak(&own_commits);
+        let own_heatmap = crate::stats::heatmap_52w(&own_commits);
+        let own_hours   = crate::stats::hour_pattern(&own_commits, 365);
         let mut all_dates: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut top_repos: Vec<(String, usize)> = vec![];
         let mut total_commits: usize = 0;
@@ -81,6 +95,7 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
             activity, lang_dist, top_repos, repo_commits, total_commits,
             dirty_count, behind_count,
             day_pattern,
+            own_total, own_streak, own_heatmap, own_hours,
         });
     });
 
