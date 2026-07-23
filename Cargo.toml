@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Multi-repo git workflow manager"
 authors = ["dualfroz"]
+license = "MIT"
+repository = "https://github.com/dualfroz/fxg"
+readme = "README.md"
+keywords = ["git", "tui", "cli", "workflow", "productivity"]
+categories = ["command-line-utilities", "development-tools"]
 build = "build.rs"
 
 [[bin]]

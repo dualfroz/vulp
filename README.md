@@ -122,6 +122,11 @@ kody wyjścia `0` ok · `1` błąd · `2` złe użycie · `3` auth · `4` nie zn
 Listy PR/issues są dziś GitHub-only — na innych providerach zakładki 5/6
 będą puste (known limitation).
 
+## Rozwój / Contributing
+
+Build ze źródeł, wymagania, layout kodu, `cargo clippy`/`cargo test` przed PR:
+patrz [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Licencja
 
 MIT — patrz [LICENSE](LICENSE).
