@@ -362,20 +362,12 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                 state.modal = Modal::Text { title: "Edit todo — Title".into(), prompt: "Title:".into(), value: cur, tag: TextTag::TodoEditTitle(ti), max_len: Some(100) };
             }
         }
-        KeyCode::Delete | KeyCode::Char('D') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            if state.tab == Tab::Todos {
-                if let Some(ti) = state.cur_todo_idx() {
-                    let title = state.todos[ti].title.clone();
-                    state.modal = Modal::Confirm { message: format!("Delete '{}'?", title), tag: ConfirmTag::DeleteTodo(ti) };
-                }
-            } else if state.tab == Tab::Projects {
-                if let Some(pi) = state.cur_proj_idx() {
-                    let name = state.projects[pi].name.clone();
-                    state.modal = Modal::Confirm { message: format!("Delete project '{}'?", name), tag: ConfirmTag::DeleteProject(pi) };
-                }
-            }
-        }
-        KeyCode::Delete => {
+        // Terminals deliver Shift+d as an already-uppercase 'D' without a
+        // separate SHIFT modifier flag on the char event (same class of bug
+        // as the Ctrl+A fix above) — match the bare char instead of gating
+        // on a modifier that never actually arrives, and fold the identical
+        // plain-`Delete` handling into the same arm rather than duplicating it.
+        KeyCode::Delete | KeyCode::Char('D') => {
             if state.tab == Tab::Todos {
                 if let Some(ti) = state.cur_todo_idx() {
                     let title = state.todos[ti].title.clone();

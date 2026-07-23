@@ -424,7 +424,7 @@ fn render_right_pr(f: &mut Frame, state: &HubState, area: Rect) {
         lines.push(r_kv("Number", &format!("#{}", pr.number), Color::DarkGray));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(format!(" \"{}\"", pr.title.chars().take(30).collect::<String>()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
-        if pr.title.len() > 30 {
+        if pr.title.chars().count() > 30 {
             lines.push(Line::from(Span::styled(format!("  {}", pr.title.chars().skip(30).take(30).collect::<String>()), Style::default().fg(Color::White))));
         }
         lines.push(Line::from(""));
@@ -459,7 +459,7 @@ fn render_right_issue(f: &mut Frame, state: &HubState, area: Rect) {
         lines.push(r_kv("Number",   &format!("#{}", issue.number), Color::DarkGray));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(format!(" \"{}\"", issue.title.chars().take(30).collect::<String>()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
-        if issue.title.len() > 30 {
+        if issue.title.chars().count() > 30 {
             lines.push(Line::from(Span::styled(format!("  {}", issue.title.chars().skip(30).take(30).collect::<String>()), Style::default().fg(Color::White))));
         }
         lines.push(Line::from(""));
