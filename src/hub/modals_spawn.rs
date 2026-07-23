@@ -20,6 +20,10 @@ pub fn spawn_create_repo(
     commands: Vec<String>,
     owner: Option<String>,
 ) {
+    if state.create_repo_rx.is_some() {
+        state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<CreateRepoMsg>();
     state.create_repo_rx = Some(rx);
     state.modal = Modal::Info {
@@ -74,6 +78,10 @@ pub fn spawn_create_repo(
 /// Like `spawn_create_repo`, but for a folder that already has git commits —
 /// only creates the remote (if missing) and pushes; never stages or commits.
 pub fn spawn_publish_existing(state: &mut HubState, path: std::path::PathBuf, display_name: String, owner: Option<String>) {
+    if state.create_repo_rx.is_some() {
+        state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<CreateRepoMsg>();
     state.create_repo_rx = Some(rx);
     state.modal = Modal::Info {
@@ -121,6 +129,10 @@ pub fn spawn_publish_existing(state: &mut HubState, path: std::path::PathBuf, di
 /// creation, but the generic Progress/Done shape and the `Modal::Info` polling
 /// already wired up in `keys.rs` apply just as well here.
 pub fn spawn_create_pr(state: &mut HubState, repo: String, title: String, head: String, base: String) {
+    if state.create_repo_rx.is_some() {
+        state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<CreateRepoMsg>();
     state.create_repo_rx = Some(rx);
     state.modal = Modal::Info {
@@ -160,6 +172,10 @@ pub fn spawn_create_pr(state: &mut HubState, repo: String, title: String, head: 
 /// Opens an issue via the Quick Actions panel. Same shared-channel pattern as
 /// `spawn_create_pr` above.
 pub fn spawn_create_issue(state: &mut HubState, repo: String, title: String) {
+    if state.create_repo_rx.is_some() {
+        state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<CreateRepoMsg>();
     state.create_repo_rx = Some(rx);
     state.modal = Modal::Info {
@@ -330,6 +346,10 @@ pub fn spawn_convention_preview(state: &mut HubState, repo: std::path::PathBuf, 
 /// `Modal::Info` pattern; reuses `CreateRepoMsg` since a push needs no
 /// payload back, just success/failure.
 pub fn spawn_profile_push(state: &mut HubState, snap: crate::profile::SettingsSnapshot) {
+    if state.create_repo_rx.is_some() {
+        state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<CreateRepoMsg>();
     state.create_repo_rx = Some(rx);
     let repo_name = crate::profile::SETTINGS_REPO_NAME.to_string();
@@ -364,6 +384,10 @@ pub fn spawn_profile_push(state: &mut HubState, snap: crate::profile::SettingsSn
 /// instead of `CreateRepoMsg`.
 pub fn spawn_profile_pull(state: &mut HubState) {
     use super::state::ProfilePullMsg;
+    if state.profile_pull_rx.is_some() {
+        state.status_msg = Some("A settings pull is already running — wait for it to finish.".into());
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel::<ProfilePullMsg>();
     state.profile_pull_rx = Some(rx);
     let repo_name = crate::profile::SETTINGS_REPO_NAME.to_string();
@@ -411,6 +435,10 @@ pub fn open_bulk_import_picker(state: &mut HubState, acc_idx: usize) {
 /// it auto-imports it immediately, since landing on this flow already means
 /// "I trust this account's data" and a second confirmation would be noise.
 pub fn spawn_bulk_import(state: &mut HubState, acc_idx: usize, affiliation: crate::providers::RepoAffiliation) {
+    if state.pull_all_rx.is_some() {
+        state.status_msg = Some("A workspace job is already running — wait for it to finish.".into());
+        return;
+    }
     let Some(acc) = state.accounts.get(acc_idx).cloned() else { return; };
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     state.pull_all_rx = Some(rx);

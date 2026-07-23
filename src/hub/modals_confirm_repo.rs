@@ -101,6 +101,10 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 state.status_msg = Some(format!("Path does not exist: {}", src.display()));
                 return None;
             }
+            if state.pull_all_rx.is_some() {
+                state.status_msg = Some("A workspace job is already running — wait for it to finish.".into());
+                return None;
+            }
             let workspace = state.workspace_root.clone();
             let (tx, rx) = std::sync::mpsc::channel::<String>();
             state.pull_all_rx = Some(rx);
@@ -186,6 +190,10 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
 
         // ── Remove .git from all workspace repos ──────────────────────────────
         Modal::Confirm { tag: ConfirmTag::RemoveGitAll, .. } => {
+            if state.pull_all_rx.is_some() {
+                state.status_msg = Some("A workspace job is already running — wait for it to finish.".into());
+                return None;
+            }
             let workspace = state.workspace_root.clone();
             let (tx, rx) = std::sync::mpsc::channel::<String>();
             state.pull_all_rx = Some(rx);
