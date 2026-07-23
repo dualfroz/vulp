@@ -246,7 +246,7 @@ pub async fn run_overview_tui(
             }
             PhaseResult::ExecOpenEditor(path) => {
                 let editor = state.editor.clone();
-                let _ = std::process::Command::new(&editor).arg(&path).status();
+                let _ = crate::util::launch_editor(&editor, &path);
             }
             PhaseResult::None => {}
         }

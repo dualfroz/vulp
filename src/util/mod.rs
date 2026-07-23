@@ -34,6 +34,19 @@ pub fn walk_files<F: FnMut(&std::path::Path)>(root: &std::path::Path, cb: &mut F
     }
 }
 
+/// Launches the configured editor against `target`, treating `editor` as a
+/// whitespace-separated command line (program + flags) rather than a single
+/// binary name — common editor configs like `"code --wait"` or `"vim -R"`
+/// would otherwise fail to spawn entirely, since `Command::new` looks for a
+/// literal executable named `"code --wait"`.
+pub fn launch_editor(editor: &str, target: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
+    let mut parts = editor.split_whitespace();
+    let Some(prog) = parts.next() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty editor command"));
+    };
+    std::process::Command::new(prog).args(parts).arg(target).status()
+}
+
 /// Open a file, directory, or URL with the system default application.
 pub fn open_path(target: &str) {
     #[cfg(target_os = "macos")]

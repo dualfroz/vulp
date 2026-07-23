@@ -7,6 +7,7 @@
 use super::git::{build_history, checkout_branch, git_run, list_branches, push_branch};
 use super::settings_io::{try_load_settings, try_make_provider};
 use super::types::{RepoSettings, St};
+use crate::util::launch_editor;
 use anyhow::Result;
 
 /// Runs the action identified by `idx` (one of the numeric codes set on
@@ -78,19 +79,19 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
         // ── 106-109: open in editor (leave_tui is handled by run_detail_loop) ─
         106 => {
             let editor = st.cfg_editor.clone();
-            if let Err(e) = std::process::Command::new(&editor).arg(&path).status() {
+            if let Err(e) = launch_editor(&editor, &path) {
                 st.status_msg = Some(format!("Couldn't launch editor '{}': {}", editor, e));
             }
         }
         107 => {
             let editor = st.cfg_editor.clone();
-            if let Err(e) = std::process::Command::new(&editor).arg(path.join(".gitignore")).status() {
+            if let Err(e) = launch_editor(&editor, &path.join(".gitignore")) {
                 st.status_msg = Some(format!("Couldn't launch editor '{}': {}", editor, e));
             }
         }
         108 => {
             let editor = st.cfg_editor.clone();
-            if let Err(e) = std::process::Command::new(&editor).arg(path.join("LICENSE")).status() {
+            if let Err(e) = launch_editor(&editor, &path.join("LICENSE")) {
                 st.status_msg = Some(format!("Couldn't launch editor '{}': {}", editor, e));
             }
         }
@@ -99,7 +100,7 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let readme = ["README.md", "README.rst", "README"].iter()
                 .map(|f| path.join(f)).find(|p| p.exists())
                 .unwrap_or_else(|| path.join("README.md"));
-            if let Err(e) = std::process::Command::new(&editor).arg(&readme).status() {
+            if let Err(e) = launch_editor(&editor, &readme) {
                 st.status_msg = Some(format!("Couldn't launch editor '{}': {}", editor, e));
             }
         }
@@ -108,7 +109,7 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
         110 => {
             if let Some(file) = st.pending_file.take() {
                 let editor = st.cfg_editor.clone();
-                if let Err(e) = std::process::Command::new(&editor).arg(&file).status() {
+                if let Err(e) = launch_editor(&editor, &file) {
                     st.status_msg = Some(format!("Couldn't launch editor '{}': {}", editor, e));
                 }
             }
