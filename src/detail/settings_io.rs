@@ -68,8 +68,15 @@ pub fn poll_settings_rx(st: &mut St) {
             st.settings_err = None;
         }
         Some(Err(e)) => {
+            // A revoked/expired token doesn't surface any of the "no
+            // account configured" phrasing below — it comes back from the
+            // provider as an HTTP 401 with a body like GitHub's literal
+            // "Bad credentials", which needs its own check so the user gets
+            // steered toward `vulp auth import` instead of a generic error.
+            let lower = e.to_lowercase();
             let auth_fail = e.contains("No GitHub account") || e.contains("no account")
-                || e.contains("no github") || e.contains("authentication");
+                || e.contains("no github") || e.contains("authentication")
+                || lower.contains("bad credentials") || lower.contains(" 401 ");
             if auth_fail {
                 st.settings     = Some(settings_fallback(st));
                 st.settings_err = Some(e);
