@@ -42,10 +42,13 @@ impl GitLabProvider {
 
     /// Builds GitLab's URL-encoded project identifier (`namespace%2Frepo`),
     /// since the v4 API addresses projects by encoded path rather than a
-    /// separate numeric id field this codebase tracks.
+    /// separate numeric id field this codebase tracks. `repo` may already be
+    /// a full `group/subgroup/repo` path (mirrors `GitHubProvider::slug`) —
+    /// in that case it's used verbatim instead of prefixing `self.namespace`
+    /// again, which would otherwise mangle any group- or subgroup-owned
+    /// project into a nonexistent `namespace/group/repo` path.
     fn repo_id(&self, repo: &str) -> String {
-        // Percent-encode "namespace/repo" for use in URL path segments
-        let raw = format!("{}/{}", self.namespace, repo);
+        let raw = if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.namespace, repo) };
         raw.replace('/', "%2F")
     }
 
