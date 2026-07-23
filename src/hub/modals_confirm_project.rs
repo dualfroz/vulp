@@ -13,12 +13,19 @@ use crate::todos::{self, Todo, TodoStatus};
 pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
     match modal {
         Modal::Text { value, tag: TextTag::Label(ri), .. } => {
-            let display = if value.trim().is_empty() {
-                state.repos[ri].path.file_name().unwrap_or_default().to_string_lossy().to_string()
-            } else { value.clone() };
-            state.repos[ri].name = display.clone();
-            let _ = crate::labels::save_label(&state.repos[ri].path.clone(), &value, &state.workspace_root);
-            state.rebuild_display();
+            // `ri` was captured when the modal opened; a background refresh
+            // (bulk import / create-repo / profile-pull all replace
+            // `state.repos` wholesale) may have completed since then, so this
+            // must degrade gracefully instead of indexing straight in.
+            if let Some(repo) = state.repos.get(ri) {
+                let display = if value.trim().is_empty() {
+                    repo.path.file_name().unwrap_or_default().to_string_lossy().to_string()
+                } else { value.clone() };
+                let path = repo.path.clone();
+                state.repos[ri].name = display;
+                let _ = crate::labels::save_label(&path, &value, &state.workspace_root);
+                state.rebuild_display();
+            }
             None
         }
 
