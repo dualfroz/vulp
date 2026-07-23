@@ -125,14 +125,27 @@ fn file_write_token(id: &str, token: &str) -> Result<()> {
         .map(|l| l.to_string())
         .collect();
     lines.push(format!("{}={}", id, token));
+    let contents = lines.join("\n") + "\n";
 
-    std::fs::write(&path, lines.join("\n") + "\n")?;
-
-    // 600 permissions — owner read/write only
+    // On Unix, open with mode 0600 from the start (`OpenOptions::mode` sets
+    // the mode atomically at creation) instead of `fs::write` + a follow-up
+    // `set_permissions` — the latter leaves a real window, between the file
+    // hitting disk at the umask-derived default (typically world-readable
+    // 0644) and the chmod landing, where another local user could read the
+    // plaintext token.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true).create(true).truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(contents.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, contents)?;
     }
     Ok(())
 }
@@ -328,7 +341,11 @@ pub async fn run(args: AuthArgs, cfg: &AppConfig) -> Result<()> {
                 accounts.iter().find(|a| a.is_default).map(|a| a.id()).unwrap_or_default()
             });
             let token = get_token(&id)?;
-            println!("Token for {}: {}…", id, &token[..token.len().min(8)]);
+            // Byte-safe truncation: a raw `&token[..8]` would panic if byte 8
+            // fell mid-character for any non-ASCII token (tokens are ASCII
+            // today, but nothing enforces that on `auth add --token`).
+            let preview: String = token.chars().take(8).collect();
+            println!("Token for {}: {}…", id, preview);
         }
     }
     Ok(())
