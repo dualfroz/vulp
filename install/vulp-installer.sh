@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install/vulp-installer.sh | bash
 set -euo pipefail
 
-REPO="${VULP_REPO:-dualfroz/fxg}"
+REPO="${VULP_REPO:-dualfroz/vulp}"
 INSTALL_DIR="${VULP_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_NAME="vulp"
 

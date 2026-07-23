@@ -7,7 +7,7 @@ land if discussed in an issue first.
 ## Building from source
 
 ```bash
-git clone https://github.com/dualfroz/fxg.git vulp
+git clone https://github.com/dualfroz/vulp.git vulp
 cd vulp
 cargo build --release
 ./target/release/vulp --help

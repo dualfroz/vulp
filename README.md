@@ -15,12 +15,12 @@ Gotowa binarka (Linux/Windows), bez Rusta:
 
 ```bash
 # Linux
-curl -fsSL https://raw.githubusercontent.com/dualfroz/fxg/main/install/vulp-installer.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.sh | bash
 ```
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/dualfroz/fxg/main/install/vulp-installer.ps1 | iex
+irm https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.ps1 | iex
 ```
 
 Albo ze źródeł: `cargo install --path .`

@@ -2,7 +2,7 @@
 # Usage: irm https://raw.githubusercontent.com/<owner>/<repo>/main/install/vulp-installer.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$Repo = if ($env:VULP_REPO) { $env:VULP_REPO } else { "dualfroz/fxg" }
+$Repo = if ($env:VULP_REPO) { $env:VULP_REPO } else { "dualfroz/vulp" }
 $InstallDir = if ($env:VULP_INSTALL_DIR) { $env:VULP_INSTALL_DIR } else { "$env:LOCALAPPDATA\vulp" }
 $BinName = "vulp.exe"
 
