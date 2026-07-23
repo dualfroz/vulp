@@ -7,8 +7,12 @@ use serde_json::Value;
 
 /// The GitHub repo this binary is published from. Shared with the installer
 /// scripts (`install/vulp-installer.sh`/`.ps1`), which hit the same
-/// `releases/latest` endpoint to fetch the newest build.
-pub const VULP_REPO: &str = "dualfroz/fxg";
+/// `releases/latest` endpoint to fetch the newest build. Overridable via
+/// `$VULP_REPO` (same env var the installers already honor), so a fork or a
+/// future rename doesn't require a rebuild just to fix the update-check tile.
+fn vulp_repo() -> String {
+    std::env::var("VULP_REPO").unwrap_or_else(|_| "dualfroz/fxg".to_string())
+}
 
 /// One GitHub release's metadata, trimmed to what the update tile shows.
 #[derive(Debug, Clone)]
@@ -43,14 +47,14 @@ async fn fetch_release(url: &str) -> Result<ReleaseInfo> {
 
 /// Info about the very latest release on GitHub, regardless of what's running.
 pub async fn fetch_latest() -> Result<ReleaseInfo> {
-    fetch_release(&format!("https://api.github.com/repos/{VULP_REPO}/releases/latest")).await
+    fetch_release(&format!("https://api.github.com/repos/{}/releases/latest", vulp_repo())).await
 }
 
 /// Info about the release matching the version actually running, if one was
 /// tagged (`v{CARGO_PKG_VERSION}`) — lets the tile show who shipped *this*
 /// build and when, not just what's newest.
 pub async fn fetch_current(version: &str) -> Result<ReleaseInfo> {
-    fetch_release(&format!("https://api.github.com/repos/{VULP_REPO}/releases/tags/v{version}")).await
+    fetch_release(&format!("https://api.github.com/repos/{}/releases/tags/v{version}", vulp_repo())).await
 }
 
 /// The `created_at` date (YYYY-MM-DD) of a GitHub user/org — for the General
