@@ -495,11 +495,19 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
         KeyCode::Char('o') => { st.run_action = Some(106); }
         KeyCode::Char('y') => {
             let path = st.summary.path.to_string_lossy().to_string();
-            if copy_to_clipboard(&path) { st.status_msg = Some("Path copied!".into()); }
+            st.status_msg = Some(if copy_to_clipboard(&path) {
+                "Path copied!".into()
+            } else {
+                format!("No clipboard tool found — path: {}", path)
+            });
         }
         KeyCode::Char('u') => {
             if let Some(ref url) = st.remote_url_str.clone() {
-                if copy_to_clipboard(url) { st.status_msg = Some("URL copied!".into()); }
+                st.status_msg = Some(if copy_to_clipboard(url) {
+                    "URL copied!".into()
+                } else {
+                    format!("No clipboard tool found — URL: {}", url)
+                });
             }
         }
         KeyCode::Char('g') => {

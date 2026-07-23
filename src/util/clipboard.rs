@@ -17,11 +17,24 @@ pub fn copy_to_clipboard(text: &str, cmd: &str) -> bool {
     child.wait().map(|s| s.success()).unwrap_or(false)
 }
 
-/// Copy text by auto-detecting the available clipboard tool (wl-copy or xclip).
+/// Copy text by auto-detecting the available clipboard tool: `wl-copy`/`xclip`
+/// on Linux, `pbcopy` on macOS, `clip` on Windows. Tries every candidate for
+/// the current OS in order and returns on the first one that actually
+/// launches and exits successfully — callers should surface a status message
+/// on `false` (nothing copied) rather than assume success, since on Linux
+/// without either tool installed, or on an unexpected platform, this is a
+/// real "no-op" outcome the user needs to know about.
 pub fn copy_auto(text: &str) -> bool {
-    for (cmd, args) in [("wl-copy", &[][..]), ("xclip", &["-selection", "clipboard"][..])] {
+    #[cfg(target_os = "macos")]
+    let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
+    #[cfg(target_os = "windows")]
+    let candidates: &[(&str, &[&str])] = &[("clip", &[])];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidates: &[(&str, &[&str])] = &[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"])];
+
+    for (cmd, args) in candidates {
         if let Ok(mut child) = std::process::Command::new(cmd)
-            .args(args).stdin(std::process::Stdio::piped()).spawn() {
+            .args(*args).stdin(std::process::Stdio::piped()).spawn() {
             if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
             if child.wait().map(|s| s.success()).unwrap_or(false) { return true; }
         }
