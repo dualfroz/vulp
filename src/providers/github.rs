@@ -418,8 +418,8 @@ impl Provider for GitHubProvider {
     async fn list_issues(&self, repo: &str) -> Result<Vec<IssueDetail>> {
         let resp = self.client
             .get(self.url(&format!(
-                "repos/{}/{}/issues?state=open&per_page=100&pulls=false",
-                self.owner, repo
+                "repos/{}/issues?state=open&per_page=100&pulls=false",
+                self.slug(repo)
             )))
             .send().await?;
         if !resp.status().is_success() { return Ok(vec![]); }
