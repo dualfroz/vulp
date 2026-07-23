@@ -12,6 +12,9 @@ pub fn list(
     lang: Option<String>, project: Option<String>, alerts: bool, stale_deploy: bool,
     no_external: bool, external: bool,
 ) -> Result<()> {
+    if no_external && external {
+        die(2, "--no-external and --external are mutually exclusive");
+    }
     let mut repos = scan_repos(cfg);
 
     if dirty  { repos.retain(|r| r.is_dirty); }

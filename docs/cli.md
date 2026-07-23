@@ -110,7 +110,7 @@ Both empty (the default) disables the feature entirely — no SSH attempted.
 ## Git operations
 
 ```
-vulp sync <repo>... [--action pull|push|commit-push] [-m MSG]
+vulp sync <repo>... [--action pull|push|commit-push] [-m MSG] [--allow-secrets]
 vulp sync --all --action pull
 vulp sync --project NAME --action push
 vulp release <repo> --tag v1.2.0 [--notes "..."]   # git tag + push + provider release
@@ -156,6 +156,21 @@ vulp accounts [--json]
 
 `pr/issue list` read the on-disk cache (`~/.vulp/`) — the same one the TUI
 uses; run `vulp refresh` first when freshness matters.
+
+## Auth (non-interactive account management)
+
+```
+vulp auth import                                        # import from `gh` CLI, no token needed
+vulp auth add --provider github --token ghp_xxx [--alias work] [--url https://...]
+vulp auth remove <account>                               # <account> = provider/alias, e.g. github/work
+vulp auth switch <account>                               # change which account is the default
+vulp auth test [<account>]                                # verify a token still works, print a preview
+```
+
+`--url` is for self-hosted GitLab/Gitea instances; omit it for github.com/gitlab.com.
+Every subcommand here is fully non-interactive (no prompts) and usable from
+scripts/CI without ever touching `gh` — `vulp auth import` is the convenience
+path when `gh` is already authenticated, `add` is the direct path when it isn't.
 
 ## Per-repo utilities
 
