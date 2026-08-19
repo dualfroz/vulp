@@ -1,4 +1,5 @@
 /target
+/target-deb
 .env
 *.env
 node_modules/
