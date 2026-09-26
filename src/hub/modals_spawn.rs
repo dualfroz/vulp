@@ -1,17 +1,5 @@
-//! Background-thread launchers for every hub action that talks to a
-//! provider API, runs git/shell commands, or otherwise does work too slow
-//! to run on the draw loop's thread. Each `spawn_*` function starts a
-//! `std::thread` (with its own short-lived Tokio runtime where async work
-//! is needed) and returns immediately; progress/results flow back over the
-//! channel already wired into `HubState` (`create_repo_rx`, `codeintel_rx`,
-//! `pull_all_rx`, etc.), polled every frame by `keys_poll`/`keys`.
-
 use super::state::{CodeIntelMsg, CreateRepoMsg, HubState, Modal, SelectTag};
 
-/// Initializes a new local repo onto a remote provider entirely in the background,
-/// without ever leaving the TUI: runs `commands` (if any), then stages, commits,
-/// creates the remote repo via the API, and pushes. Progress streams into a live
-/// `Modal::Info` via `state.create_repo_rx`.
 pub fn spawn_create_repo(
     state: &mut HubState,
     path: std::path::PathBuf,
@@ -39,8 +27,6 @@ pub fn spawn_create_repo(
     std::thread::spawn(move || {
         for cmd in &commands {
             let _ = tx.send(CreateRepoMsg::Progress(format!("$ {}", cmd)));
-            // .output() captures stdout/stderr instead of inheriting the TUI's
-            // terminal, so the command can't corrupt the still-active raw-mode screen.
             let _ = std::process::Command::new("sh")
                 .args(["-c", cmd.as_str()])
                 .current_dir(&path)
@@ -75,8 +61,6 @@ pub fn spawn_create_repo(
     });
 }
 
-/// Like `spawn_create_repo`, but for a folder that already has git commits —
-/// only creates the remote (if missing) and pushes; never stages or commits.
 pub fn spawn_publish_existing(state: &mut HubState, path: std::path::PathBuf, display_name: String, owner: Option<String>) {
     if state.create_repo_rx.is_some() {
         state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
@@ -124,10 +108,6 @@ pub fn spawn_publish_existing(state: &mut HubState, path: std::path::PathBuf, di
     });
 }
 
-/// Opens a pull request via the Quick Actions panel. Reuses `CreateRepoMsg`/
-/// `create_repo_rx` the same way `spawn_profile_push` does — this isn't a repo
-/// creation, but the generic Progress/Done shape and the `Modal::Info` polling
-/// already wired up in `keys.rs` apply just as well here.
 pub fn spawn_create_pr(state: &mut HubState, repo: String, title: String, head: String, base: String) {
     if state.create_repo_rx.is_some() {
         state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
@@ -169,8 +149,6 @@ pub fn spawn_create_pr(state: &mut HubState, repo: String, title: String, head: 
     });
 }
 
-/// Opens an issue via the Quick Actions panel. Same shared-channel pattern as
-/// `spawn_create_pr` above.
 pub fn spawn_create_issue(state: &mut HubState, repo: String, title: String) {
     if state.create_repo_rx.is_some() {
         state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
@@ -212,9 +190,6 @@ pub fn spawn_create_issue(state: &mut HubState, repo: String, title: String) {
     });
 }
 
-/// Shared plumbing for the code-intelligence actions below: opens the
-/// channel, shows a busy status message, and runs `work` on a plain OS
-/// thread (no Tokio needed — `codeintel` is synchronous).
 fn spawn_codeintel<F>(state: &mut HubState, busy_msg: &str, work: F)
 where
     F: FnOnce() -> CodeIntelMsg + Send + 'static,
@@ -228,8 +203,6 @@ where
     });
 }
 
-/// Formats parsed function signatures per the requested verbosity level, for
-/// the "List functions" code-intel action.
 fn format_function_lines(funcs: &[crate::codeintel::FunctionInfo], format: crate::codeintel::FuncFormat) -> Vec<String> {
     use crate::codeintel::FuncFormat;
     funcs.iter().map(|f| match format {
@@ -243,8 +216,6 @@ fn format_function_lines(funcs: &[crate::codeintel::FunctionInfo], format: crate
     }).collect()
 }
 
-/// Code-intel action: lists every function found in the repo at `format`'s
-/// verbosity level.
 pub fn spawn_list_functions(state: &mut HubState, repo: std::path::PathBuf, name: String, format: crate::codeintel::FuncFormat) {
     spawn_codeintel(state, "Parsing functions...", move || {
         let funcs = crate::codeintel::list_functions(&repo, format);
@@ -254,7 +225,6 @@ pub fn spawn_list_functions(state: &mut HubState, repo: std::path::PathBuf, name
     });
 }
 
-/// Code-intel action: finds every reference to `ident` in the repo.
 pub fn spawn_find_usages(state: &mut HubState, repo: std::path::PathBuf, name: String, ident: String) {
     spawn_codeintel(state, "Finding usages...", move || {
         let usages = crate::codeintel::find_usages(&repo, &ident);
@@ -266,8 +236,6 @@ pub fn spawn_find_usages(state: &mut HubState, repo: std::path::PathBuf, name: S
     });
 }
 
-/// Code-intel action: computes per-language function/file counts, longest
-/// functions, and largest files for the repo.
 pub fn spawn_repo_stats(state: &mut HubState, repo: std::path::PathBuf, name: String) {
     spawn_codeintel(state, "Computing repo stats...", move || {
         let s = crate::codeintel::repo_stats(&repo);
@@ -293,8 +261,6 @@ pub fn spawn_repo_stats(state: &mut HubState, repo: std::path::PathBuf, name: St
     });
 }
 
-/// Formats a rename/convention `RenamePlan` as a unified-diff-style preview
-/// (capped at 200 edit lines so a huge plan doesn't flood the modal).
 fn rename_plan_preview_lines(plan: &crate::codeintel::RenamePlan) -> Vec<String> {
     let mut lines = vec![format!("{} edit(s) across {} file(s):", plan.edits.len(), plan.file_count()), String::new()];
     for e in plan.edits.iter().take(200) {
@@ -309,8 +275,6 @@ fn rename_plan_preview_lines(plan: &crate::codeintel::RenamePlan) -> Vec<String>
     lines
 }
 
-/// Code-intel action: builds a dry-run plan for renaming `old` to `new` and
-/// shows it as a `Modal::RenamePreview` awaiting confirmation.
 pub fn spawn_rename_preview(state: &mut HubState, repo: std::path::PathBuf, name: String, old: String, new: String) {
     spawn_codeintel(state, "Building rename plan...", move || {
         let plan = crate::codeintel::build_rename_plan(&repo, &old, &new);
@@ -325,8 +289,6 @@ pub fn spawn_rename_preview(state: &mut HubState, repo: std::path::PathBuf, name
     });
 }
 
-/// Code-intel action: builds a dry-run plan for converting every function
-/// name in the repo to `target`'s naming convention.
 pub fn spawn_convention_preview(state: &mut HubState, repo: std::path::PathBuf, name: String, target: crate::codeintel::NamingConvention) {
     spawn_codeintel(state, "Building conversion plan...", move || {
         let plan = crate::codeintel::build_convention_plan(&repo, target);
@@ -341,10 +303,6 @@ pub fn spawn_convention_preview(state: &mut HubState, repo: std::path::PathBuf, 
     });
 }
 
-/// Pushes a settings snapshot to the (private) settings-sync repo, creating
-/// it on first use. Mirrors `spawn_create_repo`'s background-thread + live
-/// `Modal::Info` pattern; reuses `CreateRepoMsg` since a push needs no
-/// payload back, just success/failure.
 pub fn spawn_profile_push(state: &mut HubState, snap: crate::profile::SettingsSnapshot) {
     if state.create_repo_rx.is_some() {
         state.status_msg = Some("A create/publish/PR/issue job is already running — wait for it to finish.".into());
@@ -378,10 +336,6 @@ pub fn spawn_profile_push(state: &mut HubState, snap: crate::profile::SettingsSn
     });
 }
 
-/// Pulls a settings snapshot from the settings-sync repo. Unlike push, the
-/// result has to carry the fetched `SettingsSnapshot` back to the main
-/// thread to be applied, so it uses the dedicated `ProfilePullMsg` channel
-/// instead of `CreateRepoMsg`.
 pub fn spawn_profile_pull(state: &mut HubState) {
     use super::state::ProfilePullMsg;
     if state.profile_pull_rx.is_some() {
@@ -411,10 +365,6 @@ pub fn spawn_profile_pull(state: &mut HubState) {
     });
 }
 
-/// Opens the affiliation picker for bulk-importing every repo on an account.
-/// "Repos I own" is pre-checked and effectively can't be turned off (enforced
-/// when the picker is confirmed, not in the checkbox itself — see the
-/// `MultiTag::BulkImportAffiliation` handler).
 pub fn open_bulk_import_picker(state: &mut HubState, acc_idx: usize) {
     state.modal = Modal::Multi {
         title: "Bulk Import — repo categories".into(),
@@ -429,11 +379,6 @@ pub fn open_bulk_import_picker(state: &mut HubState, acc_idx: usize) {
     };
 }
 
-/// Fetches every repo matching `affiliation` via the account's own provider
-/// API (no `gh` CLI dependency) and clones/pulls each into the workspace.
-/// If a repo named `vulp-settings` turns up among them, offers nothing —
-/// it auto-imports it immediately, since landing on this flow already means
-/// "I trust this account's data" and a second confirmation would be noise.
 pub fn spawn_bulk_import(state: &mut HubState, acc_idx: usize, affiliation: crate::providers::RepoAffiliation) {
     if state.pull_all_rx.is_some() {
         state.status_msg = Some("A workspace job is already running — wait for it to finish.".into());
@@ -481,12 +426,6 @@ pub fn spawn_bulk_import(state: &mut HubState, acc_idx: usize, affiliation: crat
                 }
             }
 
-            // Disable interactive prompts: a bare `git clone`/`pull` on a private
-            // repo with no working SSH agent (or a credential helper that's
-            // itself stuck) will otherwise sit forever with no terminal to
-            // satisfy it. Env vars cover git's own prompts; the wall-clock
-            // timeout below covers everything else (slow/hung credential
-            // helpers, DNS, etc.) so one bad repo can't freeze the whole batch.
             let no_prompt = |cmd: &mut std::process::Command| {
                 cmd.env("GIT_TERMINAL_PROMPT", "0")
                    .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10")
@@ -514,8 +453,6 @@ pub fn spawn_bulk_import(state: &mut HubState, acc_idx: usize, affiliation: crat
             };
             for (i, repo) in repos.iter().enumerate() {
                 let target = workspace.join(&repo.name);
-                // `repo.url` is the human-facing html_url, not a git remote —
-                // append `.git` for the HTTPS fallback when there's no ssh_url.
                 let https_url = format!("{}.git", repo.url);
                 let url = if !repo.ssh_url.is_empty() { &repo.ssh_url } else { &https_url };
                 let action = if target.exists() {
@@ -536,18 +473,11 @@ pub fn spawn_bulk_import(state: &mut HubState, acc_idx: usize, affiliation: crat
     });
 }
 
-/// Orgs the default account can create repos under, if any. A single quick
-/// blocking API call — fine for the repo-creation flow, which already pauses
-/// for a name prompt anyway.
 pub fn fetch_orgs_blocking(state: &HubState) -> Vec<String> {
     let accounts = crate::auth::load_accounts(&state.cfg).unwrap_or_default();
     let Some(acc) = crate::providers::default_account(&accounts, Some(&state.cfg.default_provider)).cloned() else {
         return vec![];
     };
-    // We're called from inside the already-running tokio runtime (main is
-    // #[tokio::main]), so block_on-ing here directly would panic with
-    // "Cannot start a runtime from within a runtime". Do the call on a plain
-    // OS thread instead, same trick spawn_create_repo uses above.
     let handle = std::thread::spawn(move || {
         let Ok(provider) = crate::providers::make_provider(&acc) else { return vec![]; };
         let Ok(rt) = tokio::runtime::Runtime::new() else { return vec![]; };
@@ -556,8 +486,6 @@ pub fn fetch_orgs_blocking(state: &HubState) -> Vec<String> {
     handle.join().unwrap_or_default()
 }
 
-/// Opens the template picker shown after naming a new repo, listing "Blank"
-/// plus every saved `RepoTemplate`.
 pub fn open_template_picker(state: &mut HubState, name: String, owner: Option<String>) {
     let mut opts = vec!["Blank (no template)".to_string()];
     for t in &state.templates {
@@ -576,8 +504,6 @@ pub fn open_template_picker(state: &mut HubState, name: String, owner: Option<St
     };
 }
 
-/// Opens the Code Intelligence repo picker (previously bound to `m` on the
-/// Stats tab, now reached through the action menu).
 pub fn open_codeintel_picker(state: &mut HubState) {
     if state.repos.is_empty() {
         state.status_msg = Some("No repos in workspace".into());
@@ -592,10 +518,6 @@ pub fn open_codeintel_picker(state: &mut HubState) {
     };
 }
 
-/// Opens the contextual `[m]` action menu: every action available on the
-/// current tab (plus the cursor's repo/project/todo, if any), each entry
-/// showing its direct key so the menu doubles as a cheat sheet. Selected
-/// entries mostly re-dispatch their key through `handle_global_key`.
 pub fn open_action_menu(state: &mut HubState) {
     use super::state::{MenuAction, Tab};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -637,8 +559,6 @@ pub fn open_action_menu(state: &mut HubState) {
         entries.push(entry("Delete project",         "Del",   kc(KeyCode::Delete)));
     }
 
-    // Bulk-aware (multi-select > cursor repo > project): only shown when at
-    // least one targeted repo is missing a license file.
     if state.action_targets().iter().any(|&ri| !state.repos[ri].has_license) {
         entries.push(entry("Add LICENSE (MIT/Apache)", "", MenuAction::AddLicense));
     }
@@ -677,8 +597,6 @@ pub fn open_action_menu(state: &mut HubState) {
     }
 
     entries.push(entry("New repository",        "N", k('N')));
-    // 'p' on Stats is the period cycle (guarded arm runs first), so the
-    // project menu would be unreachable through re-dispatch there.
     if state.tab != Tab::Stats {
         entries.push(entry("Project menu",      "p", k('p')));
     }
@@ -696,9 +614,6 @@ pub fn open_action_menu(state: &mut HubState) {
     };
 }
 
-/// Builds the weekly digest in the background ([d] on Stats) and shows it
-/// as a `Modal::Info` when done — a content preview before anything is ever
-/// posted to Discord (see `crate::digest`).
 pub fn spawn_digest_preview(state: &mut HubState) {
     use super::state::DigestMsg;
 
@@ -734,10 +649,6 @@ pub fn spawn_digest_preview(state: &mut HubState) {
     });
 }
 
-/// Runs the full API refresh ([R]) in the background: per-repo metadata,
-/// open PR/issue lists, and workspace-wide merged/closed counters. Progress
-/// streams through `state.refresh_rx` (polled by `keys_poll::poll_refresh`),
-/// which also applies the results — the UI never blocks.
 pub fn spawn_api_refresh(state: &mut HubState) {
     use super::state::RefreshMsg;
 
@@ -749,11 +660,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
         Ok(a) if !a.is_empty() => a,
         _ => { state.status_msg = Some("No accounts configured — vulp auth add".into()); return; }
     };
-    // (display name = cache key, owner/repo slug for the API, branch for
-    // the CI-run lookup). Org-owned repos are reachable through the personal
-    // token, so no owner filtering. The repo name comes from the remote URL,
-    // not the local folder name — they can differ (vulp's own folder is
-    // "vulp", its GitHub repo is "fxg").
     let repos: Vec<(String, Option<String>, String, String)> = state.repos.iter()
         .map(|r| {
             let basename = r.remote_repo_name.clone().unwrap_or_else(|| {
@@ -762,8 +668,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             (r.name.clone(), r.owner.clone(), basename, r.branch.clone())
         })
         .collect();
-    // For the Tier-B local measurements (release cadence, repo size, deploy
-    // drift) below — those need the on-disk path, not the provider slug.
     let repo_paths: Vec<(String, std::path::PathBuf)> = state.repos.iter()
         .map(|r| (r.name.clone(), r.path.clone()))
         .collect();
@@ -798,8 +702,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
             let total = targets.len();
             let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-            // Dependabot alert counts: one org-level request per distinct
-            // owner (personal owners 404 → None → unknown, shown as "—").
             let mut dependabot: std::collections::HashMap<String, Option<std::collections::HashMap<String, u32>>> =
                 std::collections::HashMap::new();
             {
@@ -812,9 +714,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 }
             }
 
-            // Deploy drift: one batched remote command (if configured) lists
-            // every mirrored repo's HEAD sha; comparing against local HEAD is
-            // then a cheap per-repo git call, folded into the metas loop below.
             let deploy_heads = if crate::deploy::is_configured(&cfg) {
                 let _ = tx.send(RefreshMsg::Progress("Checking deploy drift...".into()));
                 crate::deploy::scan_deploy_heads(&cfg)
@@ -822,9 +721,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 None
             };
 
-            // Up to 6 repos in flight — sequential fetch of ~50 repos × 4
-            // requests took 40-80 s; this brings it to ~10 s without tripping
-            // GitHub's secondary rate limits.
             let results: Vec<_> = stream::iter(targets.into_iter().map(|(name, slug, branch)| {
                 let provider = provider.clone();
                 let tx = tx.clone();
@@ -873,8 +769,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 if let Some(i) = i { issues.push((name, i)); }
             }
 
-            // Workspace-wide merged/closed counters — one search query per
-            // metric, scoped to every owner we know.
             {
                 let mut owners: std::collections::HashSet<String> =
                     repos.iter().filter_map(|(_, o, _, _)| o.clone()).collect();
@@ -887,9 +781,6 @@ pub fn spawn_api_refresh(state: &mut HubState) {
                 closed_counts = Some((merged, closed, ciss));
             }
 
-            // Tier-B local measurements (release cadence, repo size) — no
-            // network, cheap (~0.2s/50 repos measured), so a plain sequential
-            // pass is fine. Only run during `[R]`, never on tab entry.
             let _ = tx.send(RefreshMsg::Progress("Measuring release cadence + repo size...".into()));
             let matcher = crate::stats::OwnEmailMatcher::resolve(&cfg, &accounts);
             let mut stats_cache = crate::stats::cache::load();

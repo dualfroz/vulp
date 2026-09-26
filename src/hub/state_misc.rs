@@ -1,10 +1,3 @@
-//! Small standalone types that don't fit the other state groupings: the
-//! repo-list sort order, the Todos tab's status-view/grouping modes, and
-//! the user-defined repo template format (persisted to `templates.toml`).
-
-/// Which todo statuses the Todos tab currently shows, cycled with `[s]`.
-/// Filters the underlying set *before* grouping — e.g. in `Active`, a
-/// `Status` grouping only ever produces "In Progress"/"Open" headers.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum TodoStatusView {
     #[default]
@@ -31,7 +24,6 @@ impl TodoStatusView {
             Self::All      => Self::Active,
         }
     }
-    /// Whether `status` survives this view's filter.
     pub fn allows(self, status: &crate::todos::TodoStatus) -> bool {
         use crate::todos::TodoStatus as S;
         match self {
@@ -43,8 +35,6 @@ impl TodoStatusView {
     }
 }
 
-/// How the Todos tab groups its (already status-view-filtered) list,
-/// cycled with `[g]`.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum TodoGroupBy {
     #[default]
@@ -73,9 +63,6 @@ impl TodoGroupBy {
     }
 }
 
-/// Repo-list ordering for the Repos tab, cycled with a single key. Pinned
-/// repos always sort to the top regardless of this setting (see
-/// `HubState::rebuild_display`), so this only orders the unpinned remainder.
 #[derive(Clone, Copy, PartialEq)]
 pub enum SortMode { Default, Name, Age, DirtyFirst, BehindFirst }
 
@@ -91,10 +78,6 @@ impl SortMode {
     }
 }
 
-/// A user-defined command shortcut shown in the HubSettings tab and runnable
-/// against any repo. Persisted verbatim to `~/.vulp/templates.toml` — these
-/// field names are part of that on-disk format, so don't rename them without
-/// adding a `#[serde(rename = "...")]` alias for backward compatibility.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepoTemplate {
     pub name:        String,

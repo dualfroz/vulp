@@ -1,8 +1,3 @@
-//! Top-level draw routine for the hub: the tab bar, the 73/27 split between
-//! the tab body (`tabs::render_list`) and the right info panel
-//! (`right_panel::render_right`), the bottom hint/debug bar, and the modal
-//! overlay.
-
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -15,9 +10,6 @@ use super::right_panel::render_right;
 use super::state::{HubState, SortMode, Tab};
 use super::tabs::render_list;
 
-/// Full key-binding reference shown by the `?` help modal.
-/// KEEP IN SYNC with `keys_dispatch.rs` (and the `[m]` menu in
-/// `modals_spawn::open_action_menu`) — stale entries here are a bug.
 pub static HELP_LINES: &[&str] = &[
     "── Navigation ───────────────────────────────",
     " m            Action menu for current tab/selection",
@@ -84,9 +76,6 @@ pub static HELP_LINES: &[&str] = &[
     " Esc / q      Close modal or quit",
 ];
 
-/// Draws the entire hub frame: top tab bar, the current tab's body plus
-/// right panel (or the debug log, in debug mode), and either a contextual
-/// hint line or the active modal on top of everything.
 pub fn render_hub(f: &mut Frame, state: &mut HubState) {
     let area = f.area();
     let bottom_h: u16 = if state.debug_mode { 11 } else { 3 };
@@ -143,7 +132,6 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         Span::raw("   "),
     ];
 
-    // Active filter indicators — only shown when on, so they don't crowd the bar.
     let active_filter_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
     if state.filter_dirty    { top_spans.push(Span::styled("[d:dirty] ",    active_filter_style)); }
     if state.filter_behind   { top_spans.push(Span::styled("[b:behind] ",   active_filter_style)); }
@@ -219,9 +207,6 @@ pub fn render_hub(f: &mut Frame, state: &mut HubState) {
         let key = |k: &str| Span::styled(format!("[{}] ", k), dim);
         let sep = || Span::styled("  ", dim);
 
-        // Contextual line 3: scan progress, selection hint, or (on the Todos
-        // tab) the current view/group state plus the keys that change it —
-        // moved here out of the panel title, which read as clutter.
         let line3 = if state.scan_rx.is_some() {
             Line::from(Span::styled("  scanning repositories…", dim))
         } else if !state.selected.is_empty() {

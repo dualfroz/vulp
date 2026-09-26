@@ -1,9 +1,3 @@
-//! Repo-detail view: the full-screen TUI shown after selecting a single
-//! repo from the hub. Owns the loop that polls background fetches, draws
-//! the current tab, and routes key events — the actual state shape lives in
-//! `types.rs`, key handling in `keys.rs`, background I/O in `settings_io.rs`,
-//! out-of-TUI actions in `actions.rs`, and rendering in `render.rs`.
-
 mod actions;
 mod git;
 mod keys;
@@ -14,9 +8,6 @@ mod types;
 pub use git::{activity_1d, activity_7d, activity_30d, activity_90d, activity_1y, activity_all};
 pub use types::*;
 
-/// Builds the full commit/tag history for `path`, exposed at the crate root
-/// so the project-detail view can reuse the same history-building logic
-/// without depending on `detail`'s private `git` submodule directly.
 pub fn build_history_pub(path: &std::path::Path, limit: usize) -> Vec<HistEntry> {
     git::build_history(path, limit)
 }
@@ -34,15 +25,6 @@ use git::{
 use keys::{handle_key, handle_modal_key};
 use settings_io::{compute_activity, poll_api_rx, poll_prs_issues_rx, poll_settings_rx, spawn_prs_issues_fetch, spawn_settings_fetch};
 
-// ── entry point ───────────────────────────────────────────────────────────────
-
-/// Opens the detail view for `summary`. Reuses an already-live terminal
-/// handed over by the hub when given one (avoids a flash of the alternate
-/// screen toggling off and back on), otherwise sets up a fresh one. On a
-/// normal exit (back to the hub), hands the still-live terminal back to the
-/// caller instead of tearing it down — the hub reuses it for its own next
-/// frame, so the alternate screen never toggles off in between. Only torn
-/// down here if `run_detail_loop` itself errors.
 pub async fn run(
     summary:   RepoSummary,
     cfg:       &AppConfig,
@@ -51,14 +33,11 @@ pub async fn run(
     let path = summary.path.clone();
     let name = summary.name.clone();
 
-    // Reuse the handed terminal (no LeaveAlternateScreen flash) or create a
-    // new one. Either way, TUI is live before any blocking git calls.
     let mut terminal = match maybe_term {
         Some(t) => t,
         None    => crate::tui::setup()?,
     };
 
-    // Show "Loading…" while we run the blocking git subprocesses.
     terminal.draw(|f| {
         use ratatui::widgets::Paragraph;
         f.render_widget(
@@ -150,7 +129,6 @@ pub async fn run(
         summary,
     };
 
-    // Main loop — terminal stays alive the whole time.
     match run_detail_loop(&mut st, &mut terminal).await {
         Ok(())  => Ok(terminal),
         Err(e)  => { crate::tui::teardown(terminal)?; Err(e) }
@@ -162,7 +140,6 @@ async fn run_detail_loop(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<
         let action = tui_phase_inner(st, terminal)?;
         if st.quit { break; }
         if let Some(a) = action {
-            // Leave alternate screen for interactive prompts, then return.
             crate::tui::leave_tui(terminal)?;
             let r = exec_action(st, a).await;
             crate::tui::enter_tui(terminal)?;
@@ -172,12 +149,6 @@ async fn run_detail_loop(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<
     Ok(())
 }
 
-/// Runs draw/poll/input frames until a key handler requests an out-of-TUI
-/// action (returned as `Some(idx)`) or the view quits (returned as `None`).
-/// `idx` values 40/41/50/80 are handled here rather than handed up to
-/// `exec_action`, since they're cheap, non-interactive follow-ups (refresh a
-/// file preview, recompute a stats chart, kick off a background fetch) that
-/// don't need to leave the alternate screen.
 fn tui_phase_inner(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<Option<usize>> {
     let path = st.summary.path.clone();
     loop {
@@ -247,16 +218,12 @@ fn tui_phase_inner(st: &mut St, terminal: &mut crate::tui::Tty) -> Result<Option
     }
 }
 
-/// Triggers a Settings-tab fetch the first time that tab is visited this
-/// session, so switching tabs repeatedly doesn't refetch on every visit.
 fn maybe_load_settings(st: &mut St) {
     if st.tab == Tab::Settings && st.settings.is_none() {
         st.run_action = Some(50);
     }
 }
 
-/// Triggers a PRs/Issues fetch the first time either of those tabs is
-/// visited this session, mirroring `maybe_load_settings`.
 fn maybe_load_prs_issues(st: &mut St) {
     if (st.tab == Tab::PRs || st.tab == Tab::Issues) && !st.prs_loaded && st.prs_issues_rx.is_none() {
         st.run_action = Some(80);

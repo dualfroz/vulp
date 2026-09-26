@@ -1,8 +1,3 @@
-//! Top-level draw routine for the repo-detail view: the topbar, the
-//! per-tab body (delegated to the `render_tabs`/`render_provider_tabs`
-//! submodules), the right-hand info panel (`render_side`), the bottom hint
-//! bar, and the modal overlay (`render_modal`).
-
 mod render_modal;
 mod render_provider_tabs;
 mod render_side;
@@ -17,10 +12,6 @@ use ratatui::{
     Frame,
 };
 
-// ── top-level draw ────────────────────────────────────────────────────────────
-
-/// Lays out the topbar, the 73/27 split of tab body and right panel, the
-/// bottom hint bar, and finally the modal overlay on top of everything.
 pub fn draw(f: &mut Frame, st: &St) {
     let area = f.area();
 
@@ -55,14 +46,9 @@ pub fn draw(f: &mut Frame, st: &St) {
     render_side::render_right(f, st, cols[1]);
     render_bottombar(f, st, vert[2]);
 
-    // Modal overlay — rendered last so it's on top
     render_modal::render_modal(f, st, area);
 }
 
-// ── top bar ───────────────────────────────────────────────────────────────────
-
-/// Draws the repo name, branch, ahead/behind and dirty indicators, and the
-/// numbered tab list.
 fn render_topbar(f: &mut Frame, st: &St, area: Rect) {
     let r = &st.summary;
 
@@ -123,10 +109,6 @@ fn render_topbar(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-// ── bottom bar ────────────────────────────────────────────────────────────────
-
-/// Draws the global key hints on line 1 and a tab-specific second line of
-/// hints below it.
 fn render_bottombar(f: &mut Frame, st: &St, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let key = |k: &str| Span::styled(format!("[{}] ", k), dim);
@@ -183,10 +165,6 @@ fn render_bottombar(f: &mut Frame, st: &St, area: Rect) {
     ]), area);
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-/// Draws a full-width dim horizontal separator line, used by every tab and
-/// panel renderer to visually divide sections.
 pub fn dsep(width: u16) -> Line<'static> {
     Line::from(Span::styled(
         " ".to_string() + &"─".repeat(width.saturating_sub(2) as usize),

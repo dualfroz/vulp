@@ -1,17 +1,8 @@
-//! `process_modal_confirm` arms for the HubSettings tab: workspace root,
-//! editor, and clipboard-command edits, the settings-profile menu chain
-//! (save/copy-JSON/import-JSON/push), and the bulk-import account picker.
-
 use super::modals_spawn::spawn_profile_pull;
 use super::state::{HubState, Modal, ProfileScopeAction, SelectTag, TextTag};
 
-/// Handles one step of a HubSettings or settings-profile modal chain.
-/// Returns `None` once `modal` has been consumed by one of this file's
-/// arms, or `Some(modal)` unchanged so the next file in the chain (see
-/// `modals::process_modal_confirm`) can try it.
 pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
     match modal {
-        // ── Hub Settings editing ──────────────────────────────────────────────
         Modal::Text { value, tag: TextTag::SetWorkspace, .. } => {
             let path = super::modals::expand_tilde(&value);
             if !path.exists() {
@@ -75,7 +66,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Settings Profiles & Sync ────────────────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::ProfileMenu { profile_count }, .. } => {
             if cursor < profile_count {
                 let profiles = crate::profile::list_profiles(&state.cfg);
@@ -165,8 +155,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
         }
         Modal::Select { cursor, tag: SelectTag::ProfileScope(action), .. } => {
             let include_structure = cursor == 1;
-            // Editor/clipboard live only in the in-session mirror fields until
-            // now — fold them into cfg so the snapshot captures what's on screen.
             state.cfg.editor = state.editor.clone();
             state.cfg.clipboard_cmd = state.clipboard_cmd.clone();
             let snap = crate::profile::snapshot(&state.cfg, include_structure);
@@ -194,7 +182,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Bulk import ──────────────────────────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::PullAllAccount, .. } => {
             super::modals_spawn::open_bulk_import_picker(state, cursor);
             None

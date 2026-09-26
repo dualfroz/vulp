@@ -1,7 +1,3 @@
-//! `Provider` implementation for GitHub (and GitHub Enterprise, via a
-//! custom `base_url`). Talks to the REST API directly over `reqwest` rather
-//! than the `gh` CLI, so it works the same whether or not `gh` is installed.
-
 use super::{CiStatus, IssueDetail, PrDetail, PrInfo, Provider, RepoAffiliation, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -14,7 +10,6 @@ pub struct GitHubProvider {
     base_url: String,
 }
 
-/// Extracts the `rel="next"` URL from an RFC-5988 `Link` header, if present.
 fn link_next_url(link: &str) -> Option<String> {
     link.split(',')
         .find(|part| part.contains("rel=\"next\""))
@@ -26,9 +21,6 @@ fn link_next_url(link: &str) -> Option<String> {
 }
 
 impl GitHubProvider {
-    /// Builds a client authenticated with `token`, scoped to `owner`'s repos
-    /// by default. `base_url` lets this point at a GitHub Enterprise
-    /// instance instead of `api.github.com`.
     pub fn new(base_url: &str, owner: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -47,9 +39,6 @@ impl GitHubProvider {
             "X-GitHub-Api-Version",
             header::HeaderValue::from_static("2022-11-28"),
         );
-        // Without a timeout, a stalled connection (flaky network, secondary
-        // rate-limiting) hangs the background worker forever with no way for
-        // the UI to surface an error — better to fail loud than hang silent.
         let client = Client::builder()
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(30))
@@ -57,21 +46,14 @@ impl GitHubProvider {
         Ok(Self { client, owner: owner.to_string(), base_url: base_url.trim_end_matches('/').to_string() })
     }
 
-    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
-    /// Repo path segment: names may arrive as bare ("vulp" → account owner)
-    /// or fully qualified ("VulCodeCom/vulp" → used verbatim), so org-owned
-    /// repos work with a personal account's token.
     fn slug(&self, repo: &str) -> String {
         if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.owner, repo) }
     }
 
-    /// Parses a response as JSON if the status was successful, otherwise
-    /// turns the non-2xx status and body into an error — the single choke
-    /// point every API call routes through so error messages stay consistent.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text = resp.text().await?;
@@ -158,7 +140,6 @@ impl Provider for GitHubProvider {
     }
 
     async fn create_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()> {
-        // Resolve 'from' to a SHA first
         let ref_url = self.url(&format!("repos/{}/git/ref/heads/{}", self.slug(repo), from));
         let resp = self.client.get(&ref_url).send().await?;
         let v = Self::check(resp).await.context("resolve ref")?;
@@ -243,8 +224,6 @@ impl Provider for GitHubProvider {
             .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
-        // `permissions` is present only on authenticated requests; write,
-        // maintain or admin all imply the ability to merge PRs.
         let perms = &v["permissions"];
         let viewer_can_merge = perms["push"].as_bool().unwrap_or(false)
             || perms["maintain"].as_bool().unwrap_or(false)
@@ -286,10 +265,6 @@ impl Provider for GitHubProvider {
         &self, org: &str,
     ) -> Result<Option<std::collections::HashMap<String, u32>>> {
         let mut counts = std::collections::HashMap::new();
-        // One request covers up to 100 open alerts org-wide. The endpoint is
-        // cursor-paginated (`page=` returns 400), so past that we follow the
-        // Link rel="next" header — capped so a pathological org can't stall
-        // the refresh.
         let mut next = Some(format!(
             "{}?state=open&per_page=100",
             self.url(&format!("orgs/{}/dependabot/alerts", org)),
@@ -298,7 +273,6 @@ impl Provider for GitHubProvider {
             let Some(url) = next.take() else { break };
             let resp = self.client.get(&url).send().await?;
             if !resp.status().is_success() {
-                // 403 (scope/feature) / 404 (not an org) — unavailable, not an error.
                 return Ok(None);
             }
             next = resp.headers().get(header::LINK)
@@ -407,8 +381,6 @@ impl Provider for GitHubProvider {
                 url:         pr["html_url"].as_str().unwrap_or("").to_string(),
                 draft:       pr["draft"].as_bool().unwrap_or(false),
                 labels,
-                // Stamped later from the repo's viewer permission (list_pull_requests
-                // has no repo-level permission field); false until then.
                 viewer_can_merge: false,
             }
         }).collect()).unwrap_or_default();
@@ -425,7 +397,6 @@ impl Provider for GitHubProvider {
         if !resp.status().is_success() { return Ok(vec![]); }
         let list: Value = resp.json().await.unwrap_or(Value::Array(vec![]));
         let issues = list.as_array().map(|arr| arr.iter()
-            // GitHub /issues returns PRs too — filter them out
             .filter(|i| i["pull_request"].is_null())
             .map(|i| {
                 let labels: Vec<String> = i["labels"].as_array()
@@ -448,17 +419,12 @@ impl Provider for GitHubProvider {
     }
 }
 
-/// Parses a GitHub API RFC3339 timestamp into a Unix timestamp, defaulting
-/// to 0 on a parse failure rather than propagating an error for what's
-/// always a secondary/display-only field.
 fn parse_gh_ts(s: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.timestamp())
         .unwrap_or(0)
 }
 
-/// Pulls the `rel="next"` URL out of a GitHub pagination `Link` header, e.g.
-/// `<https://api.github.com/user/repos?page=2>; rel="next", <...>; rel="last"`.
 fn parse_next_link(link: &str) -> Option<String> {
     link.split(',').find_map(|part| {
         let part = part.trim();

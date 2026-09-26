@@ -1,8 +1,3 @@
-//! Dispatch for the hub's per-tab rendering: routes to either a full-screen
-//! dashboard tab (Overview/Stats/Activity/HubSettings, in the sibling
-//! `tabs_*` files) or a scrollable table (Repos/Projects/Todos/PRs/Issues,
-//! in `tabs_tables`).
-
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -16,15 +11,12 @@ use super::tabs_tables::{
     render_issues_table, render_prs_table, render_projects_table, render_repos_table, render_todos_table,
 };
 
-/// Color-codes a timestamp's age for "freshness at a glance" — green/yellow/
-/// red roughly matching how stale a repo's last commit looks in practice.
 pub fn age_color(ts: i64) -> Color {
     let days = (chrono::Utc::now().timestamp() - ts) / 86400;
     if days < 7 { Color::Green } else if days < 30 { Color::Yellow } else { Color::Red }
 }
 
 pub fn render_list(f: &mut Frame, state: &HubState, area: Rect) {
-    // New full-screen tabs don't use the list
     match state.tab {
         Tab::Overview    => { render_overview_global(f, state, area); return; }
         Tab::Stats       => { render_stats_global(f, state, area);    return; }

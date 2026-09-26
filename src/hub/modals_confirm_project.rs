@@ -1,22 +1,10 @@
-//! `process_modal_confirm` arms for the Projects and Todos features: naming/
-//! labeling repos, creating/renaming/assigning/deleting projects, and the
-//! multi-step "new todo" / "edit todo" modal chains.
-
 use super::state::{ConfirmTag, HubState, Modal, ProjAction, SelectTag, TextTag};
 use crate::projects;
 use crate::todos::{self, Todo, TodoStatus};
 
-/// Handles one step of a Projects/Todos modal chain. Returns `None` once
-/// `modal` has been consumed by one of this file's arms, or `Some(modal)`
-/// unchanged so the next file in the chain (see `modals::process_modal_confirm`)
-/// can try it.
 pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
     match modal {
         Modal::Text { value, tag: TextTag::Label(ri), .. } => {
-            // `ri` was captured when the modal opened; a background refresh
-            // (bulk import / create-repo / profile-pull all replace
-            // `state.repos` wholesale) may have completed since then, so this
-            // must degrade gracefully instead of indexing straight in.
             if let Some(repo) = state.repos.get(ri) {
                 let display = if value.trim().is_empty() {
                     repo.path.file_name().unwrap_or_default().to_string_lossy().to_string()

@@ -1,8 +1,3 @@
-//! `Provider` — the trait every hosting backend (GitHub, GitLab, Gitea/
-//! Forgejo) implements, plus the data types its methods exchange and the
-//! `make_provider`/`default_account` helpers that pick and construct the
-//! right implementation for a given `Account`.
-
 mod gitea;
 mod github;
 mod gitlab;
@@ -16,7 +11,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-/// Result of creating a remote repository: its clone URLs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoInfo {
     pub name:    String,
@@ -24,9 +18,6 @@ pub struct RepoInfo {
     pub ssh_url: String,
 }
 
-/// Which categories of remote repos to include in a bulk import. `owner` is
-/// always true in practice (the user's own repos) — kept as a field rather
-/// than implied so all three read the same way at the call site.
 #[derive(Debug, Clone, Default)]
 pub struct RepoAffiliation {
     pub owner:         bool,
@@ -34,16 +25,12 @@ pub struct RepoAffiliation {
     pub org_member:    bool,
 }
 
-/// Result of creating a pull/merge request or issue: just enough to link
-/// back to it (full detail, when needed, comes from `list_pull_requests`).
 #[derive(Debug, Clone)]
 pub struct PrInfo {
     pub number: u64,
     pub url:    String,
 }
 
-/// Basic repo metadata fetched for the Settings tab and the hub's cached
-/// stars/issues/PRs counts.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct RepoMeta {
@@ -52,14 +39,9 @@ pub struct RepoMeta {
     pub stars:        u32,
     pub description:  Option<String>,
     pub topics:       Vec<String>,
-    /// Whether the authenticated user can merge PRs here (write/maintain/admin
-    /// permission). Lets the hub hide PRs it can neither review-merge nor
-    /// learn anything from. Providers that don't expose this leave it false.
     pub viewer_can_merge: bool,
 }
 
-/// One pull/merge request, as shown in the hub's PRs tab and the repo
-/// detail view's PRs tab.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrDetail {
     pub repo:        String,
@@ -73,17 +55,10 @@ pub struct PrDetail {
     pub url:         String,
     pub draft:       bool,
     pub labels:      Vec<String>,
-    /// Whether you can merge this PR (from the repo's viewer permission,
-    /// stamped at refresh). Combined with `author` it decides relevance:
-    /// the hub shows a PR only when you authored it but can't merge it
-    /// (your contribution elsewhere) or someone else authored it and you
-    /// can (awaiting your review) — never your own PR in your own repo.
     #[serde(default)]
     pub viewer_can_merge: bool,
 }
 
-/// One issue, as shown in the hub's Issues tab and the repo detail view's
-/// Issues tab.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IssueDetail {
     pub repo:       String,
@@ -97,12 +72,10 @@ pub struct IssueDetail {
     pub comments:   u32,
 }
 
-/// Status of a repo's most recent CI run on its default branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CiStatus { Success, Failure, Running }
 
 impl CiStatus {
-    /// Stable string form used in the on-disk cache and `--json` output.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Success => "success",
@@ -112,143 +85,100 @@ impl CiStatus {
     }
 }
 
-/// A hosting backend's API surface. Methods that not every provider
-/// implements (`list_orgs`, `list_repos`, optional repo settings) have a
-/// default that either returns an empty result or bails with a clear
-/// "not supported" error, so callers can call any method on any provider
-/// without matching on which one it is.
 #[async_trait]
 #[allow(dead_code)]
 pub trait Provider: Send + Sync {
-    /// Create a new remote repository. `owner` is `Some(org)` to create it
-    /// under an organization/group instead of the authenticated user's
-    /// personal account.
     async fn create_repo(
         &self, name: &str, private: bool, description: &str, owner: Option<&str>,
     ) -> Result<RepoInfo>;
 
-    /// Organizations/groups the authenticated user can create repos under.
-    /// Empty by default — providers without a sensible equivalent just don't
-    /// offer the picker.
     async fn list_orgs(&self) -> Result<Vec<String>> {
         Ok(vec![])
     }
 
-    /// List repos visible to the authenticated user matching the given
-    /// affiliation flags. Empty by default — providers without a sensible
-    /// equivalent just don't offer bulk import.
     async fn list_repos(&self, _affiliation: &RepoAffiliation) -> Result<Vec<RepoInfo>> {
         Ok(vec![])
     }
 
-    /// Delete a remote repository.
     async fn delete_repo(&self, name: &str) -> Result<()>;
 
-    /// Replace the topic list on a repository.
     async fn set_topics(&self, repo: &str, topics: &[String]) -> Result<()>;
 
-    /// Create a branch from an existing ref.
     async fn create_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()>;
 
-    /// Open a pull-request / merge-request.
     async fn create_pull_request(
         &self, repo: &str, title: &str, body: &str, head: &str, base: &str,
     ) -> Result<PrInfo>;
 
-    /// Open a new issue. Not every provider's API is wired up yet — default
-    /// bails the same way other not-yet-implemented methods on this trait do.
     async fn create_issue(&self, _repo: &str, _title: &str, _body: &str) -> Result<PrInfo> {
         anyhow::bail!("create_issue not supported by this provider")
     }
 
-    /// Request reviewers for an open pull request / merge request.
     async fn request_reviewers(
         &self, _repo: &str, _pr_number: u64, _reviewers: &[String],
     ) -> Result<()> {
         Ok(())
     }
 
-    /// Add labels to an open pull request / issue.
     async fn add_labels(
         &self, _repo: &str, _issue_number: u64, _labels: &[String],
     ) -> Result<()> {
         Ok(())
     }
 
-    /// Add a collaborator to a repository.
     async fn add_collaborator(&self, repo: &str, user: &str, role: &str) -> Result<()>;
 
-    /// Create a release tag with release notes.
     async fn create_release(
         &self, repo: &str, tag: &str, title: &str, body: &str, draft: bool,
     ) -> Result<String>;
 
-    /// Fetch basic metadata (issues, PRs, stars).
     async fn repo_meta(&self, repo: &str) -> Result<RepoMeta>;
 
-    /// List open pull requests for a repository.
     async fn list_pull_requests(&self, _repo: &str) -> Result<Vec<PrDetail>> {
         Ok(vec![])
     }
 
-    /// List open issues for a repository (excludes PRs).
     async fn list_issues(&self, _repo: &str) -> Result<Vec<IssueDetail>> {
         Ok(vec![])
     }
 
-    /// Total hit count for a provider-side issue/PR search query (e.g.
-    /// "is:pr is:merged user:X") — used by the Overview tab's merged/closed
-    /// counters. Providers without a search API report nothing.
     async fn count_search(&self, _query: &str) -> Result<u64> {
         anyhow::bail!("count_search not supported by this provider")
     }
 
-    /// Open Dependabot-style alert counts for every repo in `org`, keyed by
-    /// lowercase "owner/name" slug — one org-level request instead of one
-    /// per repo. `Ok(None)` = endpoint unavailable (missing scope, feature
-    /// disabled, not an org, or provider has no equivalent).
     async fn org_dependabot_counts(
         &self, _org: &str,
     ) -> Result<Option<std::collections::HashMap<String, u32>>> {
         Ok(None)
     }
 
-    /// Status of the most recent CI run on `branch`. `Ok(None)` = no runs /
-    /// CI not available / provider has no equivalent.
     async fn latest_ci_status(&self, _repo: &str, _branch: &str) -> Result<Option<CiStatus>> {
         Ok(None)
     }
 
-    /// Verify the token works, return the authenticated username.
     async fn whoami(&self) -> Result<String>;
 
-    /// Change a repository's visibility.
     async fn update_visibility(&self, repo: &str, private: bool) -> Result<()> {
         let _ = (repo, private);
         anyhow::bail!("update_visibility not supported by this provider")
     }
 
-    /// Rename a repository on the remote.
     async fn rename_repo(&self, repo: &str, new_name: &str) -> Result<()> {
         let _ = (repo, new_name);
         anyhow::bail!("rename_repo not supported by this provider")
     }
 
-    /// Archive a repository (make it read-only).
     async fn archive_repo(&self, repo: &str) -> Result<()> {
         let _ = repo;
         anyhow::bail!("archive_repo not supported by this provider")
     }
 
-    /// Update the description of a repository.
     async fn update_description(&self, repo: &str, description: &str) -> Result<()> {
         let _ = (repo, description);
         anyhow::bail!("update_description not supported by this provider")
     }
 }
 
-/// Build a boxed `Provider` from an `Account`.
-/// The token must already be present in the keyring.
 pub fn make_provider(account: &Account) -> Result<Box<dyn Provider>> {
     let token = crate::auth::get_token(&account.id())?;
     match account.provider.as_str() {
@@ -272,7 +202,6 @@ pub fn make_provider(account: &Account) -> Result<Box<dyn Provider>> {
     }
 }
 
-/// Resolve the default account for a given provider name (or the global default).
 pub fn default_account<'a>(
     accounts: &'a [crate::auth::Account],
     provider_hint: Option<&str>,

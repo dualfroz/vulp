@@ -1,24 +1,11 @@
-//! Release cadence: how often a repo actually ships, from local tags.
-
-/// Per-repo release cadence, derived from local tag `creatordate`s (a tag
-/// made through the GitHub web UI only exists locally after a fetch — that's
-/// fine, since this is meant to reflect what you can see without a network
-/// round-trip; reconciling with the provider's releases API happens
-/// separately during `[R]` refresh).
-// kept: Sprint D Stats-tab redesign — no persist needed (Tier A, cheap enough
-// to recompute per session), so this is a pure on-demand query for now.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ReleaseCadence {
-    /// Median days between consecutive tags — median, not mean, so one long
-    /// dry spell can't dominate the number.
     pub median_days:    f64,
     pub last_days_ago:  i64,
     pub tag_count:      usize,
 }
 
-/// Computes cadence for `path`, or `None` when there are fewer than 3 tags
-/// (a median from 1-2 samples doesn't mean anything).
 #[allow(dead_code)]
 pub fn release_cadence(path: &std::path::Path) -> Option<ReleaseCadence> {
     let out = std::process::Command::new("git")

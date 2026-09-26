@@ -1,9 +1,3 @@
-//! Hub modal system: rendering (`render_modal`), per-keystroke editing
-//! (`handle_modal_key`), and committing a modal once the user confirms
-//! (`process_modal_confirm`). The actual confirm logic for each feature area
-//! lives in the sibling `modals_confirm_*` files, chained together below;
-//! background-thread launchers live in `modals_spawn`.
-
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
@@ -16,9 +10,6 @@ use super::state::{HubState, Modal, ModalAction};
 
 pub use super::modals_spawn::open_bulk_import_picker;
 
-/// Expands a leading `~` or `~/...` to the user's home directory; returns
-/// `s` unchanged (as a `PathBuf`) otherwise. Used by every modal that takes
-/// a free-form filesystem path, since users naturally type `~/...` paths.
 pub fn expand_tilde(s: &str) -> std::path::PathBuf {
     let s = s.trim();
     if s == "~" {
@@ -30,8 +21,6 @@ pub fn expand_tilde(s: &str) -> std::path::PathBuf {
     }
 }
 
-/// Draws the currently active modal, dispatching on its variant. Each
-/// variant gets a centered box sized to its content (`centered_rect`).
 pub fn render_modal(f: &mut Frame, modal: &Modal, area: Rect) {
     match modal {
         Modal::Text { title, prompt, value, max_len, .. } => {
@@ -154,8 +143,6 @@ pub fn render_modal(f: &mut Frame, modal: &Modal, area: Rect) {
     }
 }
 
-// ── Project color palette ─────────────────────────────────────────────────────
-
 const PALETTE: &[(&str, &str)] = &[
     ("#808080", "Gray    (default)"),
     ("#3b82f6", "Blue"),
@@ -170,26 +157,18 @@ const PALETTE: &[(&str, &str)] = &[
     ("#f43f5e", "Rose"),
 ];
 
-/// Lists every palette entry as a "`hex  Name`" display string, for the
-/// project-color `Modal::Select` picker.
 pub fn color_palette() -> Vec<String> {
     PALETTE.iter().map(|(hex, name)| format!("{}  {}", hex, name)).collect()
 }
 
-/// Looks up the hex string for a palette index, falling back to the default
-/// gray if `cursor` is somehow out of range.
 pub fn palette_hex(cursor: usize) -> String {
     PALETTE.get(cursor).map(|(h, _)| h.to_string()).unwrap_or_else(|| "#808080".into())
 }
 
-/// Finds the palette index for a stored hex value, so re-opening the color
-/// picker on an existing project starts with the right entry highlighted.
 pub fn palette_cursor_for(hex: &str) -> usize {
     PALETTE.iter().position(|(h, _)| *h == hex).unwrap_or(0)
 }
 
-/// Centers a `pct_x`%-wide, `height`-tall box inside `area`, clamping the
-/// height so it never exceeds the available space.
 pub fn centered_rect(pct_x: u16, height: u16, area: Rect) -> Rect {
     let w = area.width * pct_x / 100;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
@@ -197,9 +176,6 @@ pub fn centered_rect(pct_x: u16, height: u16, area: Rect) -> Rect {
     Rect::new(x, y, w, height.min(area.height))
 }
 
-/// Routes one key event to the active modal's per-character editing logic
-/// (typing into a text field, moving a list cursor, toggling a checkbox) and
-/// reports whether the modal should be confirmed, cancelled, or left open.
 pub fn handle_modal_key(modal: &mut Modal, code: KeyCode) -> ModalAction {
     match modal {
         Modal::Text { value, max_len, .. } => match code {
@@ -255,11 +231,6 @@ pub fn handle_modal_key(modal: &mut Modal, code: KeyCode) -> ModalAction {
     }
 }
 
-/// Commits the currently active modal: takes it out of `state.modal`
-/// (replacing with `Modal::None`) and routes it through each
-/// `modals_confirm_*::try_confirm` in turn until one of them recognizes its
-/// tag and handles it. A modal not recognized by any of them is silently
-/// dropped, same as an unmatched arm in a single big `match` would be.
 pub fn process_modal_confirm(state: &mut HubState) {
     let modal = std::mem::replace(&mut state.modal, Modal::None);
     let modal = match super::modals_confirm_project::try_confirm(state, modal)   { Some(m) => m, None => return };

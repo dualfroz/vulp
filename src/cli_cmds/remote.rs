@@ -1,6 +1,3 @@
-//! Provider-API CLI commands: PRs, issues, releases, repo utilities,
-//! `vulp init`, account listing and the blocking `vulp refresh`.
-
 use super::{die, default_provider, find_repo, log_activity, out_json};
 use crate::activity::ActivityKind;
 use crate::cli::{IssueCmd, PrCmd, RepoCmd};
@@ -90,8 +87,6 @@ pub async fn release(cfg: &AppConfig, guard: super::Guard, repo: &str, tag: &str
     if !git_run_ok(&r.path, &["push", "origin", tag]) {
         die(1, &format!("pushing tag '{tag}' failed"));
     }
-    // Publikacja release'a na providerze — best effort: tag już wypchnięty,
-    // brak konta/tokena nie powinien cofać release'a gitowego.
     let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();
     if let Some(acc) = accounts.iter().find(|a| a.is_default).or(accounts.first()) {
         if let Ok(provider) = crate::providers::make_provider(acc) {
@@ -188,9 +183,6 @@ pub async fn repo_cmd(cfg: &AppConfig, json: bool, guard: super::Guard, cmd: Rep
     }
 }
 
-/// `vulp repo license` — writes a LICENSE into each target repo that lacks
-/// one. Explicit names that already have a license are reported as skipped,
-/// not errors; `--all` targets every unlicensed workspace repo.
 fn license(cfg: &AppConfig, json: bool, guard: super::Guard, repos: Vec<String>, all: bool,
            kind: Option<String>, holder: Option<String>) -> Result<()> {
     use crate::license::{LicenseKind, WriteOutcome};
@@ -317,10 +309,6 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     let _ = account;
     let repos = super::scan_repos(cfg);
 
-    // Org-owned repos are reachable through the personal token — refresh
-    // everything with an owner, addressed by full "owner/repo" slug. The
-    // repo name comes from the remote URL, not the local folder name — they
-    // can differ (vulp's own folder is "vulp", its GitHub repo is "fxg").
     let targets: Vec<(String, String, String)> = repos.iter()
         .filter_map(|r| {
             let basename = r.remote_repo_name.clone().unwrap_or_else(|| {
@@ -330,8 +318,6 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
         })
         .collect();
 
-    // Dependabot alert counts: one org-level request per distinct owner
-    // (personal owners 404 → None → unknown).
     let mut dependabot: std::collections::HashMap<String, Option<std::collections::HashMap<String, u32>>> =
         std::collections::HashMap::new();
     {
@@ -344,9 +330,6 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
         }
     }
 
-    // Deploy drift: one batched remote command (if configured) lists every
-    // mirrored repo's HEAD sha; comparing against local HEAD is then a cheap
-    // per-repo git call, folded into the metas loop below.
     let deploy_heads = if crate::deploy::is_configured(cfg) {
         eprintln!("checking deploy drift...");
         crate::deploy::scan_deploy_heads(cfg)
@@ -398,9 +381,6 @@ pub async fn refresh(cfg: &AppConfig, json: bool) -> Result<()> {
     }
     let _ = crate::cache::save(&cache);
 
-    // Tier-B local measurements (repo size trend, external-clone classification)
-    // — no network, cheap, only ever recorded during a refresh (never on a
-    // plain read like `vulp status`).
     let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();
     let matcher = crate::stats::OwnEmailMatcher::resolve(cfg, &accounts);
     let mut stats_cache = crate::stats::cache::load();

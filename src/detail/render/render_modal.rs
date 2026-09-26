@@ -1,7 +1,3 @@
-//! Modal overlay rendering for the detail view: dispatches on `DetailModal`
-//! and draws each variant centered over the full view area, on top of
-//! whatever tab is currently rendered underneath.
-
 use super::super::{DetailModal, St};
 use ratatui::{
     layout::Rect,
@@ -11,7 +7,6 @@ use ratatui::{
     Frame,
 };
 
-/// Draws the currently active modal, if any, centered over `area`.
 pub fn render_modal(f: &mut Frame, st: &St, area: Rect) {
     match &st.modal {
         DetailModal::None => {}
@@ -111,14 +106,10 @@ pub fn render_modal(f: &mut Frame, st: &St, area: Rect) {
     }
 }
 
-/// Draws a single-line text-input modal with no error message.
 fn draw_text_modal(f: &mut Frame, area: Rect, title: &str, input: &str, hint: &str, border_col: Color) {
     draw_text_modal_with_error(f, area, title, input, hint, None, border_col);
 }
 
-/// Draws a single-line text-input modal, growing by one line and switching
-/// to a red border when `error` is `Some` (used for the New Branch modal's
-/// inline validation message).
 fn draw_text_modal_with_error(f: &mut Frame, area: Rect, title: &str, input: &str, hint: &str, error: Option<&str>, border_col: Color) {
     let w = 60u16.min(area.width.saturating_sub(4));
     let h = if error.is_some() { 7u16 } else { 6u16 };

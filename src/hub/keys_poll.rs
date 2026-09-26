@@ -1,14 +1,6 @@
-//! Per-frame polling of hub background-thread channels that don't have a
-//! dedicated `HubState::poll_*` method: pull-all, repo creation, and
-//! settings-profile pull. Each function is a no-op if its channel isn't
-//! open, so all three are safe to call unconditionally every loop iteration.
-
 use super::actions::refresh_repos;
 use super::state::{CreateRepoMsg, HubState, Modal, ProfilePullMsg};
 
-/// Drains progress messages from a "pull all repos for this account" job
-/// and, once it finishes, reloads settings (if the job imported any) and
-/// rescans the workspace so the newly-cloned repos show up.
 pub fn poll_pull_all(state: &mut HubState) {
     let done = if let Some(rx) = &state.pull_all_rx {
         let mut finished = false;
@@ -34,9 +26,6 @@ pub fn poll_pull_all(state: &mut HubState) {
     }
 }
 
-/// Drains progress from a background "create repo" job, appending lines to
-/// the open `Modal::Info` (if any) so the user sees live progress, then
-/// replaces it with the final result once the job reports `Done`.
 pub fn poll_create_repo(state: &mut HubState) {
     let outcome = if let Some(rx) = &state.create_repo_rx {
         let mut done = None;
@@ -66,9 +55,6 @@ pub fn poll_create_repo(state: &mut HubState) {
     }
 }
 
-/// Drains progress from a background "pull settings profile from the sync
-/// repo" job and, once it finishes, applies the fetched snapshot to `cfg`
-/// (rescanning the workspace too, if the snapshot included repo structure).
 pub fn poll_profile_pull(state: &mut HubState) {
     let outcome = if let Some(rx) = &state.profile_pull_rx {
         let mut done = None;
@@ -114,9 +100,6 @@ pub fn poll_profile_pull(state: &mut HubState) {
     }
 }
 
-/// Drains the background API-refresh channel: progress goes to the status
-/// line, `Done` applies fetched metadata/PRs/issues to state + cache and
-/// rebuilds the display.
 pub fn poll_refresh(state: &mut HubState) {
     use super::state::RefreshMsg;
     let mut done = None;
@@ -127,7 +110,6 @@ pub fn poll_refresh(state: &mut HubState) {
                 RefreshMsg::Done { .. } => { done = Some(msg); }
             }
         }
-        // Thread gone without Done — drop the receiver so [R] works again.
         if done.is_none() {
             if let Err(std::sync::mpsc::TryRecvError::Disconnected) = rx.try_recv() {
                 state.refresh_rx = None;
@@ -161,8 +143,6 @@ pub fn poll_refresh(state: &mut HubState) {
     state.issues = cache.all_issues().into_iter().cloned().collect();
     if closed_counts.is_some() { state.closed_counts = closed_counts; }
 
-    // The refresh thread just re-measured external-clone classification into
-    // stats_cache — pick up the fresh set so the marker/hide filter reflect it.
     state.external_repos = crate::stats::cache::load().external_repo_names();
 
     state.refresh_rx = None;

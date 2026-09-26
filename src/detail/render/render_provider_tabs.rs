@@ -1,8 +1,3 @@
-//! Renderers for the detail view's three provider-backed tabs: PRs, Issues,
-//! and per-repo Todos. Unlike the git-native tabs, PRs/Issues show a
-//! "fetching"/"not loaded" placeholder until their background fetch
-//! (`settings_io::spawn_prs_issues_fetch`) completes.
-
 use super::super::St;
 use ratatui::{
     layout::{Constraint, Rect},
@@ -11,10 +6,6 @@ use ratatui::{
     Frame,
 };
 
-// ── PRs tab ──────────────────────────────────────────────────────────────────
-
-/// Draws the PRs table, or a placeholder while the fetch is in flight or
-/// hasn't been triggered yet.
 pub fn render_prs(f: &mut Frame, st: &St, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let header = Row::new(vec!["#", "TITLE", "AUTHOR", "BRANCH", "AGE", "DRAFT"])
@@ -63,10 +54,6 @@ pub fn render_prs(f: &mut Frame, st: &St, area: Rect) {
     );
 }
 
-// ── Issues tab ────────────────────────────────────────────────────────────────
-
-/// Draws the Issues table, or a placeholder while the fetch is in flight or
-/// hasn't been triggered yet.
 pub fn render_issues(f: &mut Frame, st: &St, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let header = Row::new(vec!["#", "TITLE", "AUTHOR", "LABELS", "AGE", "CMT"])
@@ -114,9 +101,6 @@ pub fn render_issues(f: &mut Frame, st: &St, area: Rect) {
     );
 }
 
-// ── Todos tab (per-repo) ──────────────────────────────────────────────────────
-
-/// Draws the repo's todo list, color-coded by status.
 pub fn render_repo_todos(f: &mut Frame, st: &St, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let header = Row::new(vec!["STATUS", "TITLE", "EST", "DIFF", "CREATED"])

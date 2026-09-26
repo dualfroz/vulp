@@ -1,8 +1,3 @@
-//! Settings portability: snapshotting `AppConfig` (and optionally workspace/
-//! project structure) into a `SettingsSnapshot`, then saving/loading it as a
-//! named local profile, a copy-pasteable JSON blob, or a synced private git
-//! repo (`vulp-settings`) for moving settings between machines.
-
 use crate::config::AppConfig;
 use crate::projects::Project;
 use crate::workspace::Workspace;
@@ -10,15 +5,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Default name of the optional private git repo used to sync settings
-/// between machines. Also doubles as the marker bulk-import looks for to
-/// offer auto-importing settings from a freshly-connected account.
 pub const SETTINGS_REPO_NAME: &str = "vulp-settings";
 
-/// The optional, opt-in part of a snapshot: workspace layout and project
-/// groupings, kept separate from `SettingsSnapshot.config` since it leaks
-/// repo names and is meaningful to copy only when moving to a genuinely new
-/// machine, not just syncing preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceStructure {
     pub workspaces: Vec<Workspace>,
@@ -27,17 +15,10 @@ pub struct WorkspaceStructure {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingsSnapshot {
-    /// Config with machine-specific paths (workspace_root, data_dir,
-    /// vsc_data_dir) zeroed out — those never travel between machines.
     pub config: AppConfig,
-    /// `None` = settings-only snapshot. `Some` additionally carries the
-    /// workspace/project layout, which leaks repo names — opt-in only.
     pub structure: Option<WorkspaceStructure>,
 }
 
-/// Build a snapshot of the current settings (and optionally workspace
-/// structure) for export/profile-save/git-sync. Never includes tokens —
-/// those live only in the OS keyring / local `.tokens` file.
 pub fn snapshot(cfg: &AppConfig, include_structure: bool) -> SettingsSnapshot {
     let mut config = cfg.clone();
     config.workspace_root = PathBuf::new();
@@ -55,21 +36,14 @@ pub fn snapshot(cfg: &AppConfig, include_structure: bool) -> SettingsSnapshot {
     SettingsSnapshot { config, structure }
 }
 
-/// Compact (single-line) JSON — deliberately not pretty-printed, since this
-/// also has to round-trip through the single-line copy/paste Text modal.
 pub fn to_json(snap: &SettingsSnapshot) -> Result<String> {
     Ok(serde_json::to_string(snap)?)
 }
 
-/// Parses a snapshot from JSON (the inverse of `to_json`).
 pub fn from_json(s: &str) -> Result<SettingsSnapshot> {
     Ok(serde_json::from_str(s)?)
 }
 
-/// Apply a snapshot on top of the current config: machine-specific paths are
-/// preserved (not overwritten with whatever was in the snapshot), everything
-/// else is replaced. Saves config.toml (and workspaces/projects.toml if the
-/// snapshot carries structure) immediately.
 pub fn apply(snap: &SettingsSnapshot, cfg: &mut AppConfig) -> Result<()> {
     let workspace_root = cfg.workspace_root.clone();
     let data_dir        = cfg.data_dir.clone();
@@ -88,14 +62,10 @@ pub fn apply(snap: &SettingsSnapshot, cfg: &mut AppConfig) -> Result<()> {
     Ok(())
 }
 
-// ── local profiles: named snapshots for instant switching ──────────────────
-
 fn profiles_dir(cfg: &AppConfig) -> PathBuf {
     cfg.data_dir.join("profiles")
 }
 
-/// Saves `snap` as a named local profile (`<data_dir>/profiles/<name>.json`)
-/// for instant switching later via `load_profile`.
 pub fn save_profile(cfg: &AppConfig, name: &str, snap: &SettingsSnapshot) -> Result<()> {
     let dir = profiles_dir(cfg);
     std::fs::create_dir_all(&dir)?;
@@ -103,13 +73,11 @@ pub fn save_profile(cfg: &AppConfig, name: &str, snap: &SettingsSnapshot) -> Res
     Ok(())
 }
 
-/// Loads a previously saved local profile by name.
 pub fn load_profile(cfg: &AppConfig, name: &str) -> Result<SettingsSnapshot> {
     let raw = std::fs::read_to_string(profiles_dir(cfg).join(format!("{name}.json")))?;
     from_json(&raw)
 }
 
-/// Lists every saved local profile's name.
 pub fn list_profiles(cfg: &AppConfig) -> Vec<String> {
     let dir = profiles_dir(cfg);
     let Ok(entries) = std::fs::read_dir(&dir) else { return vec![] };
@@ -125,17 +93,12 @@ pub fn list_profiles(cfg: &AppConfig) -> Vec<String> {
         .collect()
 }
 
-// ── optional git-repo sync ──────────────────────────────────────────────────
-
 const SNAPSHOT_FILE: &str = "vulp-settings.json";
 
 fn local_sync_dir(cfg: &AppConfig, repo_name: &str) -> PathBuf {
     cfg.data_dir.join(repo_name)
 }
 
-/// Builds git2 push/fetch credentials trying the SSH agent first, falling
-/// back to the provider token as an HTTPS password — covers both SSH- and
-/// HTTPS-configured remotes without needing to know which one is in use.
 fn push_credentials(token: String) -> git2::RemoteCallbacks<'static> {
     let mut cb = git2::RemoteCallbacks::new();
     cb.credentials(move |_url, user, allowed| {
@@ -148,16 +111,12 @@ fn push_credentials(token: String) -> git2::RemoteCallbacks<'static> {
     cb
 }
 
-/// Push the snapshot to a private repo (created on first use). Reuses the
-/// same create-and-push path as regular repo creation, just for a folder
-/// that holds one JSON file instead of a project.
 pub async fn push_to_repo(snap: &SettingsSnapshot, cfg: &AppConfig, repo_name: &str) -> Result<String> {
     let dir = local_sync_dir(cfg, repo_name);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join(SNAPSHOT_FILE), to_json(snap)?)?;
 
     if dir.join(".git").exists() {
-        // Already linked to a remote from a previous push — commit + push.
         let repo = git2::Repository::open(&dir)?;
         let mut index = repo.index()?;
         index.add_path(std::path::Path::new(SNAPSHOT_FILE))?;
@@ -183,7 +142,6 @@ pub async fn push_to_repo(snap: &SettingsSnapshot, cfg: &AppConfig, repo_name: &
         });
         Ok(url)
     } else {
-        // First push ever: create the remote (private) and publish.
         let result = crate::legacy::adopt::adopt_folder(
             &dir, cfg, true, "Initial vulp settings sync", None, None, |_| {},
         ).await;
@@ -199,7 +157,6 @@ pub async fn push_to_repo(snap: &SettingsSnapshot, cfg: &AppConfig, repo_name: &
     }
 }
 
-/// Pull the snapshot from the sync repo, cloning it locally first if needed.
 pub async fn pull_from_repo(cfg: &AppConfig, repo_name: &str) -> Result<SettingsSnapshot> {
     let dir = local_sync_dir(cfg, repo_name);
 

@@ -1,17 +1,6 @@
-//! Repo size, measured as two separate signals rather than one sum: git
-//! object-store size (a growing number usually means bloating history —
-//! binaries, accidentally committed build output) and working-tree size
-//! (usually just `node_modules`/`target`, unrelated to the git history
-//! problem). Conflating them would have hidden exactly the pathology that
-//! motivated adding this metric: vulp's own `target/` growing to 539 MB in
-//! its committed history.
-
-/// One repo's size, in KiB.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RepoSize {
-    /// Loose + packed git objects (`git count-objects -v`).
     pub git_kb:  u64,
-    /// Working tree excluding `.git` (`du -sk --exclude=.git`).
     pub tree_kb: u64,
 }
 

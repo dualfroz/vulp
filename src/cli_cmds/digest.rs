@@ -1,5 +1,3 @@
-//! `vulp digest` — build/show/send the weekly digest of own activity.
-
 use super::{die, out_json};
 use crate::cli::DigestCmd;
 use crate::config::AppConfig;
@@ -54,8 +52,6 @@ pub async fn digest(cfg: &AppConfig, guard: super::Guard, json: bool, action: Op
     }
 }
 
-/// Gathers workspace state and builds the digest — shared by `show` and
-/// `send` so both report on exactly the same numbers.
 async fn build(cfg: &AppConfig) -> crate::digest::WeeklyDigest {
     let repos = super::scan_repos(cfg);
     let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();

@@ -1,8 +1,3 @@
-//! The hub's global keymap: one key event in, an optional `PhaseResult` out.
-//! This only runs once `tui_phase` has ruled out a modal/confirm/filter input
-//! being open — every arm here is a key that means something on the main
-//! repo/project/todo/PR/issue list itself.
-
 use super::actions::{copy_to_clipboard, get_remote_url, scan_todos_from_repos, save_bookmarks, save_pins, to_web_url};
 use super::modals::open_bulk_import_picker;
 use super::render::HELP_LINES;
@@ -12,10 +7,6 @@ use super::state::{
 use crate::todos;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-/// Handles one key event against the hub's global keymap. Returns `Some` only
-/// for the handful of keys that need `tui_phase` to leave its loop (quit, open
-/// a sub-view, or run something that needs the TUI torn down first) — every
-/// other key is fully handled here and the caller should just keep looping.
 pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseResult> {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
@@ -45,8 +36,6 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                 state.scroll_down();
             }
         }
-        // Terminals deliver Ctrl+A as lowercase 'a' + CONTROL (byte 0x01);
-        // match both cases so the binding works everywhere.
         KeyCode::Char('a') | KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let visible: Vec<usize> = state.display.iter().filter_map(|row| {
                 if let DisplayRow::Repo { repo_idx } = row { Some(*repo_idx) } else { None }
@@ -165,8 +154,6 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                     }
                 }
                 Tab::Activity => {
-                    // Jump from an activity row to that repo: switch to the
-                    // Repos tab focused on it and open its detail.
                     if let Some(ri) = state.activity_repo_at_cursor() {
                         state.tab = Tab::Repos;
                         state.rebuild_display();
@@ -362,11 +349,6 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
                 state.modal = Modal::Text { title: "Edit todo — Title".into(), prompt: "Title:".into(), value: cur, tag: TextTag::TodoEditTitle(ti), max_len: Some(100) };
             }
         }
-        // Terminals deliver Shift+d as an already-uppercase 'D' without a
-        // separate SHIFT modifier flag on the char event (same class of bug
-        // as the Ctrl+A fix above) — match the bare char instead of gating
-        // on a modifier that never actually arrives, and fold the identical
-        // plain-`Delete` handling into the same arm rather than duplicating it.
         KeyCode::Delete | KeyCode::Char('D') => {
             if state.tab == Tab::Todos {
                 if let Some(ti) = state.cur_todo_idx() {
@@ -585,7 +567,6 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
         }
         KeyCode::Char('m') => super::modals_spawn::open_action_menu(state),
 
-        // Direct tab switching (number keys)
         KeyCode::Char('1') => {
             state.tab = Tab::Overview;
             state.rebuild_display();
@@ -613,7 +594,6 @@ pub fn handle_global_key(state: &mut HubState, key: KeyEvent) -> Option<PhaseRes
     None
 }
 
-/// Collapses/expands one Todos-tab group header.
 fn toggle_todo_group(state: &mut HubState, key: String) {
     if !state.todo_group_collapsed.remove(&key) {
         state.todo_group_collapsed.insert(key);

@@ -1,7 +1,3 @@
-//! Session persistence (`~/.vulp/session.toml`): remembers the active tab
-//! and the repo under the cursor between runs. Deliberately tiny — filters
-//! and text search are NOT restored (surprising UX), only "where was I".
-
 use super::state::Tab;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

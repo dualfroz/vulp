@@ -1,8 +1,3 @@
-//! Terminal lifecycle: entering/leaving raw-mode + alternate-screen mode,
-//! polling input events, and a `Ctrl-Z` suspend handler that restores the
-//! terminal before stopping so a suspended `vulp` doesn't leave the shell
-//! reading mouse-escape sequences as commands.
-
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
@@ -18,7 +13,6 @@ use std::{io, time::Duration};
 
 pub type Tty = Terminal<CrosstermBackend<io::Stdout>>;
 
-/// Set up raw-mode alternate-screen terminal.
 pub fn setup() -> Result<Tty> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -27,7 +21,6 @@ pub fn setup() -> Result<Tty> {
     Ok(Terminal::new(backend)?)
 }
 
-/// Restore terminal to normal mode (full teardown, consumes terminal).
 pub fn teardown(mut terminal: Tty) -> Result<()> {
     disable_raw_mode()?;
     execute!(
@@ -39,7 +32,6 @@ pub fn teardown(mut terminal: Tty) -> Result<()> {
     Ok(())
 }
 
-/// Leave TUI mode temporarily (for interactive prompts) without destroying terminal.
 pub fn leave_tui(terminal: &mut Tty) -> Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
@@ -47,7 +39,6 @@ pub fn leave_tui(terminal: &mut Tty) -> Result<()> {
     Ok(())
 }
 
-/// Re-enter TUI mode after leave_tui.
 pub fn enter_tui(terminal: &mut Tty) -> Result<()> {
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
@@ -55,10 +46,6 @@ pub fn enter_tui(terminal: &mut Tty) -> Result<()> {
     Ok(())
 }
 
-/// Handle Ctrl+Z (SIGTSTP) / `fg` (SIGCONT) so a suspended vulp doesn't leave
-/// the terminal stuck in raw mode + mouse-capture: without this, every mouse
-/// move after suspend gets reported as an escape sequence straight into the
-/// shell, which tries to run it as a command.
 pub fn install_suspend_handler() {
     use signal_hook::consts::{SIGCONT, SIGTSTP};
     use signal_hook::iterator::Signals;
@@ -87,7 +74,6 @@ pub fn install_suspend_handler() {
     });
 }
 
-/// Poll for the next crossterm event with a timeout.
 pub fn next_event(timeout_ms: u64) -> Result<Option<Event>> {
     if event::poll(Duration::from_millis(timeout_ms))? {
         Ok(Some(event::read()?))
@@ -96,7 +82,6 @@ pub fn next_event(timeout_ms: u64) -> Result<Option<Event>> {
     }
 }
 
-/// Return a centred `Rect` inside `area` using percentage sizes.
 pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -116,8 +101,6 @@ pub fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
         .split(vert[1])[1]
 }
 
-/// Run `draw_fn` inside a properly-torn-down terminal.
-/// The closure returns `true` to quit, `false` to keep running.
 pub fn run_loop<F>(mut draw_fn: F) -> Result<()>
 where
     F: FnMut(&mut Tty) -> Result<bool>,

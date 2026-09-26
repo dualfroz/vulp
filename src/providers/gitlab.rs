@@ -1,6 +1,3 @@
-//! `Provider` implementation for GitLab (gitlab.com or self-hosted, via a
-//! custom `base_url`), talking to the REST API v4 directly over `reqwest`.
-
 use super::{PrInfo, Provider, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -14,9 +11,6 @@ pub struct GitLabProvider {
 }
 
 impl GitLabProvider {
-    /// Builds a client authenticated with `token`, scoped to `namespace`'s
-    /// projects by default. `base_url` lets this point at a self-hosted
-    /// GitLab instance instead of `gitlab.com`.
     pub fn new(base_url: &str, namespace: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -35,25 +29,15 @@ impl GitLabProvider {
         })
     }
 
-    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
-    /// Builds GitLab's URL-encoded project identifier (`namespace%2Frepo`),
-    /// since the v4 API addresses projects by encoded path rather than a
-    /// separate numeric id field this codebase tracks. `repo` may already be
-    /// a full `group/subgroup/repo` path (mirrors `GitHubProvider::slug`) —
-    /// in that case it's used verbatim instead of prefixing `self.namespace`
-    /// again, which would otherwise mangle any group- or subgroup-owned
-    /// project into a nonexistent `namespace/group/repo` path.
     fn repo_id(&self, repo: &str) -> String {
         let raw = if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.namespace, repo) };
         raw.replace('/', "%2F")
     }
 
-    /// Parses a response as JSON if the status was successful, otherwise
-    /// turns the non-2xx status and body into an error.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text = resp.text().await?;
@@ -130,7 +114,6 @@ impl Provider for GitLabProvider {
     async fn request_reviewers(
         &self, repo: &str, pr_number: u64, reviewers: &[String],
     ) -> Result<()> {
-        // Resolve usernames to GitLab user IDs
         let mut reviewer_ids: Vec<u64> = Vec::new();
         for username in reviewers {
             let resp = self.client
@@ -167,7 +150,6 @@ impl Provider for GitLabProvider {
     }
 
     async fn add_collaborator(&self, repo: &str, user: &str, role: &str) -> Result<()> {
-        // GitLab access levels: 30=developer, 40=maintainer, 50=owner
         let level: u8 = match role { "read" => 20, "write" => 30, _ => 40 };
         let body = json!({ "user_id": user, "access_level": level });
         let resp = self.client

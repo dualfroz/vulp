@@ -1,9 +1,3 @@
-//! Per-language tree-sitter wiring: which grammar handles which extension,
-//! and the query used to find function/method definitions in each one.
-//! Adding a language means adding one match arm here — `mod.rs` never needs
-//! to know about grammar internals.
-
-/// A source language with tree-sitter support wired up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Rust,
@@ -15,7 +9,6 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// Display name shown in repo-stats language breakdowns.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Rust       => "Rust",
@@ -28,7 +21,6 @@ impl Lang {
     }
 }
 
-/// Maps a lowercased file extension to its `Lang`, if supported.
 pub fn lang_for_ext(ext: &str) -> Option<Lang> {
     match ext {
         "rs"            => Some(Lang::Rust),
@@ -41,7 +33,6 @@ pub fn lang_for_ext(ext: &str) -> Option<Lang> {
     }
 }
 
-/// The tree-sitter grammar for `lang`.
 pub fn ts_language(lang: Lang) -> tree_sitter::Language {
     match lang {
         Lang::Rust       => tree_sitter_rust::LANGUAGE.into(),
@@ -53,9 +44,6 @@ pub fn ts_language(lang: Lang) -> tree_sitter::Language {
     }
 }
 
-/// Query that captures every function/method definition: `@function` for the
-/// whole node (used for line span + body text), `@name` for its identifier,
-/// `@params` for its parameter list.
 pub fn function_query(lang: Lang) -> &'static str {
     match lang {
         Lang::Rust => {
@@ -87,10 +75,6 @@ pub fn function_query(lang: Lang) -> &'static str {
     }
 }
 
-/// Query that captures every plain identifier reference/declaration node —
-/// deliberately excludes member/property-name node kinds (e.g. JS's
-/// `property_identifier` used for `obj.foo`), so a rename of a function
-/// named `foo` won't also touch an unrelated object property called `foo`.
 pub fn identifier_query(_lang: Lang) -> &'static str {
     "(identifier) @id"
 }

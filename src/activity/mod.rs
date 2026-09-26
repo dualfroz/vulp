@@ -1,17 +1,10 @@
-//! Local activity log (`~/.vulp/activity.log`, one JSON line per event) for
-//! actions vulp itself performed — feeds the hub's Activity tab alongside
-//! (but separately from) the git-log-sourced commit feed, which sees real
-//! commit history regardless of which tool made it.
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// The kind of action recorded in one activity log entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActivityKind { Commit, Push, Pull, Release, NewRepo, Todo, Pr, Issue, License }
 
 impl ActivityKind {
-    /// Display label shown in the Activity tab's table.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Commit  => "commit",
@@ -26,8 +19,6 @@ impl ActivityKind {
         }
     }
 
-    /// Cycle order for the Activity tab's kind filter (`All` is handled
-    /// separately as `None`).
     pub fn cycle() -> &'static [ActivityKind] {
         &[
             Self::Commit, Self::Push, Self::Pull, Self::Release,
@@ -36,7 +27,6 @@ impl ActivityKind {
     }
 }
 
-/// One recorded activity-log event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub ts:     i64,
@@ -49,14 +39,7 @@ fn log_path() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(".vulp").join("activity.log")
 }
 
-/// Appends one event to the local activity log. Only called from code paths
-/// where vulp itself performs the action (push/pull/release/repo-create/
-/// todo-scan) — it has no way to see git activity done outside vulp, which
-/// the Activity tab's commit feed (sourced straight from git log) covers
-/// separately and accurately regardless of how it happened.
 pub fn log(entry: &ActivityEntry) {
-    // Executor marker: AI agents set VULP_AGENT so their actions are
-    // distinguishable from the human's in the shared log.
     let mut entry = entry.clone();
     if std::env::var("VULP_AGENT").map(|v| !v.is_empty()).unwrap_or(false) {
         entry.detail = if entry.detail.is_empty() {
@@ -76,17 +59,11 @@ pub fn log(entry: &ActivityEntry) {
     }
 }
 
-/// Loads every logged entry, skipping any line that fails to parse (a
-/// truncated last line from a crash, for instance) rather than discarding
-/// the whole log.
 pub fn load_logged() -> Vec<ActivityEntry> {
     let Ok(content) = std::fs::read_to_string(log_path()) else { return vec![] };
     content.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
 }
 
-/// Keeps the append-only log from growing forever: when it exceeds
-/// `max_entries`, rewrites the file with only the newest `max_entries`.
-/// Called once at hub startup — cheap no-op below the threshold.
 pub fn compact(max_entries: usize) {
     let entries = load_logged();
     if entries.len() <= max_entries { return; }

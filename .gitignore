@@ -1,5 +1,4 @@
 /target
-/target-deb
 .env
 *.env
 node_modules/
@@ -10,4 +9,3 @@ __pycache__/
 dist/
 build/
 *.log
-plan/

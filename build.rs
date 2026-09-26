@@ -1,7 +1,5 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Civil date from days since Unix epoch (Howard Hinnant's algorithm) —
-/// avoids pulling chrono into build-dependencies for one date string.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

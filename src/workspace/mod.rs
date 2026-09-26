@@ -1,15 +1,8 @@
-//! Named, saved sets of repos (`<data_dir>/workspaces.toml`) — distinct from
-//! `config::AppConfig.workspace_root` (the single directory `vulp` scans);
-//! a `Workspace` is a user-curated repo list, used by the settings-profile
-//! "structure" snapshot (`profile::WorkspaceStructure`) to carry saved
-//! groupings between machines.
-
 use crate::config::AppConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// One named, saved collection of repos.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub name:       String,
@@ -22,12 +15,10 @@ struct WorkspacesFile {
     workspaces: Vec<Workspace>,
 }
 
-/// Path to the workspaces file, `<data_dir>/workspaces.toml`.
 pub fn workspaces_path(cfg: &AppConfig) -> PathBuf {
     cfg.data_dir.join("workspaces.toml")
 }
 
-/// Loads every saved workspace (empty if none have been saved yet).
 pub fn load_workspaces(cfg: &AppConfig) -> Result<Vec<Workspace>> {
     let path = workspaces_path(cfg);
     if path.exists() {
@@ -39,7 +30,6 @@ pub fn load_workspaces(cfg: &AppConfig) -> Result<Vec<Workspace>> {
     }
 }
 
-/// Overwrites the workspaces file with `workspaces`.
 pub fn save_workspaces(workspaces: &[Workspace], cfg: &AppConfig) -> Result<()> {
     let path = workspaces_path(cfg);
     if let Some(dir) = path.parent() {
@@ -49,4 +39,3 @@ pub fn save_workspaces(workspaces: &[Workspace], cfg: &AppConfig) -> Result<()> 
     std::fs::write(path, toml::to_string_pretty(&file)?)?;
     Ok(())
 }
-

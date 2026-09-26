@@ -1,7 +1,3 @@
-//! Renderers for the detail view's right-hand panel (27% width column).
-//! Most tabs show the default info+actions panel; Files/Branches/Stats
-//! replace it with a tab-specific panel showing the selected item's detail.
-
 use super::super::{St, Tab};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,7 +7,6 @@ use ratatui::{
     Frame,
 };
 
-/// Picks which right-panel variant to draw based on the active tab.
 pub fn render_right(f: &mut Frame, st: &St, area: Rect) {
     match st.tab {
         Tab::Files    => render_right_files(f, st, area),
@@ -21,8 +16,6 @@ pub fn render_right(f: &mut Frame, st: &St, area: Rect) {
     }
 }
 
-/// Default right panel: repo info on top, a fixed list of global actions on
-/// the bottom — shown for every tab without a more specific panel.
 fn render_right_default(f: &mut Frame, st: &St, area: Rect) {
     let blk   = Block::default().borders(Borders::ALL);
     let inner = blk.inner(area);
@@ -38,9 +31,6 @@ fn render_right_default(f: &mut Frame, st: &St, area: Rect) {
     render_actions_block(f, layout[1]);
 }
 
-/// Files-tab right panel: a preview of the selected file's first 200 lines
-/// (or a directory hint), loaded on demand by `tui_phase_inner`'s `run_action`
-/// 40 handling rather than eagerly for every node.
 fn render_right_files(f: &mut Frame, st: &St, area: Rect) {
     let blk   = Block::default().borders(Borders::ALL);
     let inner = blk.inner(area);
@@ -104,8 +94,6 @@ fn render_right_files(f: &mut Frame, st: &St, area: Rect) {
     }
 }
 
-/// Branches-tab right panel: detail (upstream, ahead/behind, last commit)
-/// for the cursor-selected branch, plus the branch action shortcuts.
 fn render_right_branch(f: &mut Frame, st: &St, area: Rect) {
     let blk   = Block::default().borders(Borders::ALL);
     let inner = blk.inner(area);
@@ -155,8 +143,6 @@ fn render_right_branch(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Stats-tab right panel: top contributors and a code-size summary,
-/// complementing the activity chart drawn in the left pane.
 fn render_right_stats(f: &mut Frame, st: &St, area: Rect) {
     let blk   = Block::default().borders(Borders::ALL);
     let inner = blk.inner(area);
@@ -206,11 +192,6 @@ fn render_right_stats(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-// ── info + actions (shared default right panel) ────────────────────────────
-
-/// Draws the repo metadata block (sync status, owner, visibility, license,
-/// language, stars/issues/PRs when known, and local counters) used by the
-/// default right panel.
 fn render_info_block(f: &mut Frame, st: &St, area: Rect) {
     let r   = &st.summary;
     let w   = area.width.saturating_sub(2) as usize;
@@ -257,8 +238,6 @@ fn render_info_block(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(Paragraph::new(info), area);
 }
 
-/// Draws the fixed list of global action shortcuts used by the default
-/// right panel (sync, release, open-in-editor/browser, clipboard, stash).
 fn render_actions_block(f: &mut Frame, area: Rect) {
     let act_blk   = Block::default().borders(Borders::TOP).title(" Actions ").border_style(Style::default().fg(Color::DarkGray));
     let act_inner = act_blk.inner(area);

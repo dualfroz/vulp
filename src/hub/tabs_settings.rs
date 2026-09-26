@@ -1,8 +1,3 @@
-//! The hub's HubSettings tab: workspace-level settings (root, editor,
-//! clipboard command, bulk import/de-git actions) and the user-defined
-//! repo template list, navigated with the same up/down + Enter pattern as
-//! every other list in the hub.
-
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -64,7 +59,6 @@ pub fn render_settings_global(f: &mut Frame, state: &HubState, area: Rect) {
     }
     left_lines.push(Line::from(""));
 
-    // Templates section
     left_lines.push(Line::from(Span::styled("  Templates", yel)));
     left_lines.push(Line::from(Span::styled("  ─────────────────────────────────────────────", dim)));
 

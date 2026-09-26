@@ -1,8 +1,3 @@
-//! Table renderers for the hub's list-style tabs (Repos, Projects, Todos,
-//! PRs, Issues) — one row per visible `DisplayRow`, scrolled by
-//! `HubState::offset`. The full-screen tabs (Overview, Stats, Activity,
-//! HubSettings) have their own renderers in sibling `tabs_*` files.
-
 use crate::status::format_age_pub;
 use crate::todos::TodoSource;
 use ratatui::{
@@ -78,9 +73,6 @@ pub fn render_repos_table(f: &mut Frame, state: &HubState, area: Rect) {
             };
             let stars_str = r.stars.map(|s| format!("{}", s)).unwrap_or_else(|| "—".into());
             let stars_col = if r.stars.is_some() { Color::Yellow } else { Color::DarkGray };
-            // Active branch, plus `+N` when the repo keeps other local
-            // branches (e.g. a theme per branch) — so the count is visible
-            // without opening the Branches tab.
             let branch_cell = if r.branch_count > 1 {
                 format!("{} +{}", r.branch.chars().take(9).collect::<String>(), r.branch_count - 1)
             } else {

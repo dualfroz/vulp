@@ -1,17 +1,9 @@
-//! Onboards a local folder onto a remote git provider: either from scratch
-//! (`adopt_folder` — git init, stage, commit, create remote, push) or for a
-//! folder that already has commits (`publish_existing` — just create the
-//! remote and push). Called by the hub's "Create new repo" and "Link
-//! existing folder" flows.
-
 use crate::auth::load_accounts;
 use crate::config::AppConfig;
 use crate::providers::{default_account, make_provider};
 use git2::{IndexAddOption, Repository, Signature};
 use std::path::Path;
 
-/// Outcome of an adopt/publish operation, reported back to the TUI's
-/// progress modal.
 #[derive(Debug, Clone)]
 pub struct AdoptResult {
     pub name:    String,
@@ -29,8 +21,6 @@ impl AdoptResult {
     }
 }
 
-/// Core adopt operation for a single folder:
-/// git init → stage all → initial commit → create remote repo → add remote → push
 pub async fn adopt_folder(
     path: &Path,
     cfg: &AppConfig,
@@ -42,14 +32,12 @@ pub async fn adopt_folder(
 ) -> AdoptResult {
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-    // ── git init ─────────────────────────────────────────────────────────────
     progress("git init");
     let repo = match Repository::init(path) {
         Ok(r)  => r,
         Err(e) => return AdoptResult::err(&name, format!("git init: {}", e)),
     };
 
-    // ── stage everything ─────────────────────────────────────────────────────
     progress("staging files");
     let mut index = match repo.index() {
         Ok(i)  => i,
@@ -62,7 +50,6 @@ pub async fn adopt_folder(
         return AdoptResult::err(&name, format!("index write: {}", e));
     }
 
-    // ── initial commit ────────────────────────────────────────────────────────
     progress("creating initial commit");
     let tree_id = match index.write_tree() {
         Ok(id) => id,
@@ -80,7 +67,6 @@ pub async fn adopt_folder(
         return AdoptResult::err(&name, format!("commit: {}", e));
     }
 
-    // ── create remote repo via API ────────────────────────────────────────────
     progress("resolving provider account");
     let accounts = load_accounts(cfg).unwrap_or_default();
     let acc = match default_account(&accounts, provider_hint.or(Some(&cfg.default_provider))) {
@@ -97,9 +83,6 @@ pub async fn adopt_folder(
         Err(e) => return AdoptResult::err(&name, format!("create remote repo: {}", e)),
     };
 
-    // ── git remote add origin ─────────────────────────────────────────────────
-    // Prefer HTTPS: push auth below uses the stored token, which works over HTTPS
-    // without needing the remote's SSH host key to already be trusted locally.
     let remote_url = if !repo_info.url.is_empty() {
         repo_info.url.clone()
     } else {
@@ -111,7 +94,6 @@ pub async fn adopt_folder(
         return AdoptResult::err(&name, format!("remote add: {}", e));
     }
 
-    // ── push ──────────────────────────────────────────────────────────────────
     progress("pushing to origin");
     let token  = crate::auth::get_token(&acc.id()).unwrap_or_default();
     let branch = match push_branch(&repo, cfg, token) {
@@ -122,9 +104,6 @@ pub async fn adopt_folder(
     AdoptResult::ok(&name, format!("pushed {}", branch), repo_info.url)
 }
 
-/// Pushes the current HEAD branch to `origin`, returning the branch name.
-/// Shared by `adopt_folder` (brand-new repo) and `publish_existing` (folder
-/// that already has commits, just needs a remote).
 fn push_branch(repo: &Repository, cfg: &AppConfig, token: String) -> std::result::Result<String, git2::Error> {
     let mut cb = git2::RemoteCallbacks::new();
     cb.credentials(move |_url, user, allowed| {
@@ -148,9 +127,6 @@ fn push_branch(repo: &Repository, cfg: &AppConfig, token: String) -> std::result
     Ok(branch)
 }
 
-/// For a folder that already has git commits but isn't on a remote yet:
-/// create the remote repo (if `origin` doesn't already exist) and push,
-/// without touching any existing history.
 pub async fn publish_existing(
     path: &Path,
     cfg: &AppConfig,
@@ -204,4 +180,3 @@ pub async fn publish_existing(
 
     AdoptResult::ok(&name, format!("pushed {}", branch), remote_url)
 }
-
