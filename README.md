@@ -1,132 +1,253 @@
-# Vulp
+# vulp
 
-Multi-repository git workflow manager. Jeden terminal, cały workspace:
-stan wszystkich repozytoriów, batch sync, projekty, todos, PR-y/issues,
-statystyki — plus pełne, bezpromptowe CLI, którego mogą używać skrypty
-i asystenci AI.
+vulp is a git manager for a workspace that holds many repositories. It scans
+a workspace folder, shows the state of every repository (branch, uncommitted
+changes, commits ahead of or behind the remote, language, license, cached
+provider metadata) and runs the same operation across many of them at once.
+It has two front ends over the same code: a terminal UI for people, and a
+non-interactive CLI with `--json` output and stable exit codes for scripts
+and AI agents. It talks to GitHub, GitLab and Gitea/Forgejo, and works
+offline for everything that only needs local git.
 
-- **TUI** (`vulp` bez argumentów) — interfejs dla ludzi
-- **CLI** (`vulp <komenda>`) — dla ludzi, skryptów i AI; `--json`, kody
-  wyjścia, zero interaktywnych pytań → pełna referencja: [docs/cli.md](docs/cli.md)
+## Features
 
-## Instalacja
+**Workspace overview**
 
-Gotowa binarka (Linux/Windows), bez Rusta:
+- Recursive scan of `workspace_root` (up to 5 levels deep, skipping
+  `node_modules`, `target`, `vendor`, `dist`, `build`, virtualenvs and similar),
+  streamed to the UI while it runs.
+- Per repository: branch and local branch count, dirty state, ahead/behind
+  against `origin/<branch>`, last commit and its age, latest tag, stash count,
+  dominant languages by file count (assets only counted when they dominate),
+  license file detection, owner and remote repository name parsed from the
+  `origin` URL.
+- Cached provider data after a refresh: stars, open PR and issue counts, CI
+  status of the current branch, open Dependabot alerts.
+- Display labels, bookmarks, pins, and projects (named, coloured groups of
+  repositories) used for filtering and batch operations.
+
+**Git operations**
+
+- Batch `pull`, `push` and `commit + push` over a list of repositories, a
+  project, or the whole workspace. A failure in one repository does not stop
+  the others; the exit code reports it.
+- Release: annotated tag, tag push, and a provider release when an account
+  is configured.
+- New repositories: create on the provider from a template (`templates.toml`),
+  clone from a URL, link or adopt an existing local folder, publish an
+  existing local repository.
+- In the repository detail view: commit history, branches (create, switch,
+  delete), file browser with preview, commit, tag, and remote
+  settings (description, topics, visibility, collaborators, rename, archive,
+  delete).
+- `LICENSE` generation (MIT or Apache-2.0) for repositories without one. It
+  never overwrites an existing license and never commits.
+
+**Safety**
+
+- Secret scan before every commit made through vulp: the staged diff is
+  checked for GitHub and GitLab tokens, AWS access keys, `DISCORD_TOKEN`
+  assignments and private key blocks. A hit blocks the commit and unstages the
+  changes; the matched value is never printed. `--allow-secrets` overrides it.
+- `protected_repos`: mutating commands refuse to touch listed repositories
+  unless `--force` is passed.
+- `--dry-run` on every mutating command prints what would happen and changes
+  nothing.
+- Every action vulp performs is appended to a local activity log. With
+  `VULP_AGENT` set, entries are marked as done by an agent.
+
+**Deploy drift**
+
+- If a deploy host mirrors the workspace layout under `deploy_root`, one
+  batched remote command collects the deployed HEAD of every mirrored
+  repository and each one is reported as `in_sync`, `behind:N` or `diverged`
+  against local HEAD. Repositories without a mirror are simply not reported.
+
+**Statistics and digest**
+
+- Commit statistics per repository for 1d, 7d, 30d, 90d, 1y or all time.
+- Author-filtered analytics that only count your own commits (configured
+  emails, `git config user.email`, and GitHub no-reply addresses of your
+  accounts): streaks, weekly digest, and classification of vendored clones
+  that contain none of your commits.
+- Weekly digest (own commits vs. last week, active days, streak, top
+  repositories, tags, PR and issue counts, todos), archived as Markdown under
+  `~/.vulp/digests/` and optionally posted to a Discord webhook.
+
+**Todos**
+
+- Cross-repository todo list with statuses, projects and per-repository
+  assignment, plus an importer that scans source files for `TODO`, `FIXME` and
+  `HACK` markers.
+
+**Code intelligence (tree-sitter)**
+
+- For Rust, Python, JavaScript, TypeScript/TSX and Go: list functions (with
+  arguments, length and reference counts), find usages of an identifier,
+  rename an identifier across a repository, and convert function names to
+  `snake_case`, `camelCase` or `PascalCase`. Renames only touch identifier
+  nodes, never strings or comments, and are shown as a dry run before they
+  are applied.
+
+**Settings profiles**
+
+- Settings snapshots can be saved as named profiles and synced through a
+  private `vulp-settings` repository on your provider account.
+
+## Install
+
+Prebuilt binaries are published for Linux x86_64 and Windows x86_64.
 
 ```bash
-# Linux
 curl -fsSL https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.sh | bash
 ```
 
 ```powershell
-# Windows
 irm https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.ps1 | iex
 ```
 
-Albo ze źródeł: `cargo install --path .`
+Both installers honour `VULP_REPO` and `VULP_INSTALL_DIR`.
 
-## Pierwsze uruchomienie
+## Build and run
+
+Requires a stable Rust toolchain (edition 2021) and `git` on `PATH`. OpenSSL
+and libgit2 are vendored, so no system libraries are needed.
 
 ```bash
-vulp config        # ustaw workspace_root, username, email
-vulp auth import   # zaimportuj konto z gh CLI (najprościej)
-# albo: vulp auth add --provider github --token ghp_xxx
-vulp               # odpal TUI
+cargo build --release
+./target/release/vulp --help
+cargo install --path .
 ```
 
-## TUI
-
-`vulp` otwiera hub z zakładkami (przełączanie: `Tab`/`←→` albo `1-9`):
-
-| # | Zakładka | Co robi |
-|---|----------|---------|
-| 1 | **Overview** | bento-dashboard: statystyki workspace, projekty, top repo po commitach, scalony feed aktywności (commity + akcje vulpa), todos/PRs/issues |
-| 2 | **Repos** | tabela wszystkich rep: branch, dirty/ahead/behind, język, gwiazdki; multi-select do operacji hurtowych |
-| 3 | **Projects** | grupy repozytoriów (kolor + przypisania) |
-| 4 | **Todos** | zadania ręczne + zaimportowane skanem TODO/FIXME z kodu |
-| 5/6 | **PRs / Issues** | otwarte PR-y i issues ze wszystkich rep (cache, odświeżane `[R]`) |
-| 7 | **Stats** | statystyki commitów per okres (1d–all) |
-| 8 | **Activity** | feed: commity + akcje wykonane vulpem |
-| 9 | **Settings** | edytor, schowek, workspace, konta, szablony repo, bulk import |
-
-Najważniejsze klawisze (pełna lista: `?` w aplikacji):
-
-- **`m` — kontekstowe menu akcji.** Na każdej zakładce pokazuje wszystkie
-  dostępne akcje z ich skrótami — nie musisz nic pamiętać.
-- `Enter` — szczegóły repo/projektu (historia, branch'e, pliki, diff,
-  ustawienia zdalne, akcje: sync/release/collaboratorzy…)
-- `Space` zaznacz do batcha · `s` sync (pull/commit+push) · `r` release
-- `/` filtr · `S` sort i filtry · `d/b/f` tylko dirty/behind/ahead
-- `N` nowe repo (clone/create/link) · `R` odśwież metadane z API
-- `o` otwórz w edytorze · `W` w przeglądarce · `y`/`u` kopiuj ścieżkę/URL
-
-## CLI (skrypty + AI)
-
-Każda operacja TUI ma odpowiednik w CLI. Przykłady:
+First run:
 
 ```bash
-vulp list --dirty --json          # co wymaga uwagi (JSON dla AI)
-vulp status <repo>                # szczegóły jednego repo
-vulp sync --project X --action commit-push -m "chore: update"
-vulp release <repo> --tag v1.2.0
-vulp todo add "tytuł" && vulp todo done 3
-vulp pr create --repo R --title T --head branch
-vulp repo collab <repo> <user> --role push
-vulp init nazwa --private         # git init + repo na providerze + push
+vulp config        # interactive settings: workspace_root, username, email, ...
+vulp auth import   # import the account and token from an authenticated gh CLI
+# or: vulp auth add --provider github --token <token> [--alias work] [--url https://git.example.com]
+vulp               # open the TUI
+```
+
+## Terminal UI
+
+`vulp` without arguments opens the hub. Tabs: Overview, Repos, Projects,
+Todos, PRs, Issues, Stats, Activity, Settings (switch with `Tab`, the arrow
+keys or `1`-`9`). `m` opens the action menu for the current tab and selection,
+`?` lists every key binding, `Enter` opens the repository or project detail
+view. `Ctrl+Z` suspends to the shell and restores the screen on resume.
+
+## CLI
+
+Every hub operation has a non-interactive counterpart. A few examples:
+
+```bash
+vulp list --dirty --json
+vulp status my-repo
+vulp brief --json
+vulp sync --project backend --action commit-push -m "chore: update dependencies"
+vulp release my-repo --tag v1.2.0 --notes "Bug fixes"
+vulp todo add "Write migration guide" && vulp todo done 3
+vulp project assign backend api worker
+vulp repo license --all --kind mit
 vulp stats --period 7d --json
-vulp refresh                      # dociągnij meta/PR/issues z API
+vulp refresh
 ```
 
-Kontrakt: `--json` na komendach odczytu, stdout = wynik / stderr = postęp,
-kody wyjścia `0` ok · `1` błąd · `2` złe użycie · `3` auth · `4` nie znaleziono.
-**Szczegóły i przepisy: [docs/cli.md](docs/cli.md).**
+Contract: results on stdout, progress and errors on stderr, no prompts. Exit
+codes are `0` success, `1` execution error (including a protected repository
+or a failed sync), `2` bad usage, `3` missing or invalid provider account,
+`4` repository, todo or project not found. The full command reference, JSON
+shapes and recipes for agents are in [docs/cli.md](docs/cli.md).
 
-## Konfiguracja
+## Configuration
 
-`vulp config` (interaktywnie) albo edycja `~/.vulp/config.toml`:
+`vulp config` edits `~/.vulp/config.toml`. The most relevant keys:
 
-| Pole | Domyślnie | Opis |
+| Key | Default | Meaning |
 |---|---|---|
-| `workspace_root` | `~/projects` | katalog skanowany w poszukiwaniu rep |
-| `workspace_groups` | `[]` | foldery-grupy, których dzieci są repami (np. `["clients", "opensource"]`) |
-| `data_dir` | `~/.vulp` | dane vulpa |
-| `default_provider` | `github` | provider bez `--provider` |
-| `default_branch` / `default_visibility` | `main` / `private` | dla nowych rep |
-| `editor` | `$EDITOR`/`vim` | do `o` / otwierania plików |
-| `clipboard_cmd` | auto | komenda kopiowania (`wl-copy`, `xclip …`) |
-| `username` / `email` | — | tożsamość gita |
+| `workspace_root` | `~/projects` | folder that is scanned for repositories |
+| `default_provider` | `github` | provider used when none is given |
+| `default_branch`, `default_visibility` | `main`, `private` | defaults for new repositories |
+| `editor` | `$EDITOR`, else `vim` | used by "open in editor" (may include flags) |
+| `clipboard_cmd` | first of `wl-copy`, `xclip`, `pbcopy` | command used for copy actions |
+| `protected_repos` | `[]` | repositories that need `--force` |
+| `license_holder`, `default_license` | git `user.name`, `mit` | `LICENSE` generation |
+| `stats_author_emails` | git `user.email` | identities counted as yours |
+| `deploy_ssh_cmd`, `deploy_root` | empty | deploy drift (both required) |
+| `hide_external_clones` | `false` | hide clones with none of your commits |
 
-## Pliki danych
+Data files live in `~/.vulp/`: `config.toml`, `accounts.toml`, `.tokens`
+(provider tokens and the digest webhook, mode 0600; the OS keyring is used as
+a secondary store), `projects.toml`, `todos.toml`, `labels.toml`,
+`bookmarks.toml`, `pins.toml`, `templates.toml`, `meta_cache.toml`,
+`stats_cache.toml`, `activity.log` (JSON lines) and `digests/`.
 
-```
-~/.vulp/
-├── config.toml      # ustawienia
-├── accounts.toml    # konta (tokeny w keyringu / .tokens 0600)
-├── projects.toml    # projekty (grupy rep)
-├── todos.toml       # zadania
-├── labels.toml      # etykiety wyświetlania rep
-├── bookmarks.toml / pins.toml
-├── templates.toml   # szablony nowych rep
-├── meta_cache.toml  # cache metadanych/PR/issues z API
-└── activity.log     # log akcji vulpa (JSONL)
-```
+## Providers
 
-## Providery
-
-| Provider | `--provider` | Zakres wsparcia |
+| Provider | `--provider` | Supported |
 |---|---|---|
-| GitHub | `github` | pełny (repo, PR, issues, release, collaboratorzy, search) |
-| GitLab | `gitlab` | podstawowy (tworzenie rep, collaboratorzy) |
-| Gitea/Forgejo | `gitea` | podstawowy (tworzenie rep, collaboratorzy; wymaga `--url`) |
+| GitHub | `github` | everything, including PR and issue lists, CI status, Dependabot alerts and search counts for the digest |
+| GitLab | `gitlab` | create, delete, rename, archive, visibility, topics, branches, PR creation, reviewers, labels, collaborators, releases, metadata |
+| Gitea / Forgejo | `gitea` | same as GitLab; needs `--url` |
 
-Listy PR/issues są dziś GitHub-only — na innych providerach zakładki 5/6
-będą puste (known limitation).
+## Tests
 
-## Rozwój / Contributing
+```bash
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
 
-Build ze źródeł, wymagania, layout kodu, `cargo clippy`/`cargo test` przed PR:
-patrz [CONTRIBUTING.md](CONTRIBUTING.md).
+Unit tests sit next to the code they cover: secret detection, deploy drift
+against real repositories, workspace scanning and repository summaries,
+language detection, remote URL parsing, configuration parsing, CLI argument
+parsing, license generation, own-commit analytics and the tree-sitter code
+intelligence. The integration tests in `tests/cli/` run the compiled binary
+against temporary git repositories and local bare remotes with `HOME` pointed
+at a scratch directory, and check `--json` output and exit codes for listing,
+status, sync (pull, push, commit + push, secret blocking, dry run, protected
+repositories, partial failure), releases, todos, projects, repository
+utilities, license generation, cached PR and issue lists, the digest, and the
+error paths of provider commands. They need `git` on `PATH` and run on Unix.
 
-## Licencja
+## Project layout
 
-MIT — patrz [LICENSE](LICENSE).
+```
+src/
+  main.rs, app.rs, cli.rs   entry point, dispatch, clap definitions
+  cli_cmds/                 non-interactive commands (workspace, items, remote, digest)
+  hub/                      TUI hub: state, tabs, key handling, modals, background jobs
+  detail/                   repository detail view
+  tui/                      terminal setup and Ctrl+Z handling
+  status/                   workspace scan and per-repository summary
+  providers/                GitHub, GitLab and Gitea API clients
+  auth/                     accounts and token storage
+  config/                   settings file and settings UI
+  codeintel/                tree-sitter function listing, usages and renames
+  stats/                    own-commit analytics, size history, release cadence
+  deploy.rs                 deploy drift
+  secrets.rs                staged-diff secret scan
+  digest.rs                 weekly digest
+  license/                  LICENSE templates
+  activity/, cache.rs, todos/, projects/, labels/, workspace/, profile/
+tests/cli/                  integration tests
+install/                    installer scripts
+docs/                       CLI reference and user guides
+```
+
+## Limitations
+
+- Prebuilt binaries exist only for Linux x86_64 and Windows x86_64; other
+  platforms build from source.
+- PR and issue lists, CI status, Dependabot alerts and digest search counts
+  are implemented for GitHub only. The CLI `pr list` and `issue list` read the
+  cache written by `vulp refresh`.
+- Ahead/behind uses the local `origin/<branch>` ref, so it is only as fresh
+  as the last fetch or refresh.
+- Deploy drift assumes the deploy host mirrors the workspace layout and that
+  `deploy_ssh_cmd` runs its last argument as a shell command there.
+- Digest delivery supports Discord webhooks only.
+- Code intelligence covers Rust, Python, JavaScript, TypeScript and Go.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
