@@ -1,5 +1,3 @@
-//! Todo and project CLI commands — pure `~/.vulp/*.toml` state, no network.
-
 use super::{die, out_json};
 use crate::cli::{ProjectCmd, TodoCmd};
 use crate::config::AppConfig;
@@ -39,9 +37,8 @@ pub fn todo(json: bool, cmd: TodoCmd) -> Result<()> {
                 let want = parse_status(&s);
                 all.retain(|t| t.status == want);
             }
-            all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            all.sort_by_key(|t| std::cmp::Reverse(t.updated_at));
             if json {
-                // Todo nie deriviuje Serialize (kolory ratatui w impl) — ręczna projekcja.
                 #[derive(serde::Serialize)]
                 struct T<'a> {
                     id: u64, title: &'a str, description: &'a str,
@@ -118,7 +115,6 @@ pub fn project(cfg: &AppConfig, json: bool, cmd: ProjectCmd) -> Result<()> {
             let Some(proj) = projects.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) else {
                 die(4, &format!("project '{name}' not found"));
             };
-            // Zamień nazwy na ścieżki względne od workspace_root — tak trzyma je TUI.
             let scanned = super::scan_repos(cfg);
             for repo_name in &repos {
                 let r = scanned.iter().find(|r| {

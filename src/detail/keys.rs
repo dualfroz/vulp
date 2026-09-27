@@ -1,7 +1,3 @@
-//! Key handling for the repo-detail view: validating new-branch names and
-//! dispatching key events either to the active modal (`handle_modal_key`) or
-//! to plain tab navigation and per-tab shortcuts (`handle_key`).
-
 use super::git::{copy_to_clipboard, delete_branch, git_run_ok, list_branches, to_web_url};
 use super::settings_io::{open_settings_modal, spawn_settings_op};
 use super::types::{DetailModal, SettingOp, St, Tab};
@@ -9,11 +5,6 @@ use super::{maybe_load_prs_issues, maybe_load_settings, rebuild_tree_visible};
 use crossterm::event::KeyCode;
 use git2::Repository;
 
-// ── branch name validation ────────────────────────────────────────────────────
-
-/// Checks a candidate branch name against the subset of git's ref-naming
-/// rules that are easy to violate by typing — full validation still happens
-/// in git itself when the `checkout -b` actually runs.
 pub fn validate_branch_name(name: &str) -> Option<String> {
     if name.is_empty() { return Some("Name cannot be empty".into()); }
     if name.contains(' ') { return Some("No spaces allowed".into()); }
@@ -25,11 +16,6 @@ pub fn validate_branch_name(name: &str) -> Option<String> {
     None
 }
 
-// ── modal key handling ────────────────────────────────────────────────────────
-
-/// Routes `code` to whichever modal variant is currently open. Returns
-/// `false` (and does nothing) when there is no modal, so the caller can fall
-/// through to `handle_key` for normal tab/key handling.
 pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
     match &mut st.modal {
         DetailModal::None => false,
@@ -135,17 +121,17 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
                                 spawn_settings_op(st, SettingOp::Topics { topics });
                             }
                         }
-                        63 => { // collab name → step 2: pick role
+                        63 => {
                             if !text.is_empty() {
                                 st.modal = DetailModal::SelectRole { collab_name: text, cursor: 0 };
                             }
                         }
-                        65 => { // rename
+                        65 => {
                             if !text.is_empty() {
                                 spawn_settings_op(st, SettingOp::Rename { new_name: text });
                             }
                         }
-                        70 => { // commit — stage all and commit with message
+                        70 => {
                             if !text.is_empty() {
                                 let path = st.summary.path.clone();
                                 let add_ok = git_run_ok(&path, &["add", "-A"]);
@@ -161,12 +147,12 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
                                 });
                             }
                         }
-                        91 => { // commit message for commit+push → trigger exec_action(0)
+                        91 => {
                             st.pending_sync_mode  = Some("commit_push".into());
                             st.pending_commit_msg = Some(text);
                             st.run_action         = Some(0);
                         }
-                        92 => { // tag name → ask for tag message
+                        92 => {
                             if !text.is_empty() {
                                 let default_msg = text.clone();
                                 st.pending_tag_name = Some(text);
@@ -178,7 +164,7 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
                                 };
                             }
                         }
-                        93 => { // tag message → confirm push?
+                        93 => {
                             let tag_msg = if text.is_empty() {
                                 st.pending_tag_name.clone().unwrap_or_default()
                             } else { text };
@@ -221,7 +207,7 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
                     let tag = *tag;
                     st.modal = DetailModal::None;
                     match tag {
-                        31 => { // delete branch
+                        31 => {
                             let path = st.summary.path.clone();
                             if let Some(b) = st.branches.get(st.branch_cursor) {
                                 let name = b.name.clone();
@@ -238,7 +224,7 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
                         }
                         64 => { spawn_settings_op(st, SettingOp::Archive); }
                         66 => { spawn_settings_op(st, SettingOp::Delete); }
-                        94 => { // push tag confirmed
+                        94 => {
                             st.pending_push_tag = true;
                             st.run_action = Some(1);
                         }
@@ -252,17 +238,11 @@ pub fn handle_modal_key(code: KeyCode, st: &mut St) -> bool {
     }
 }
 
-// ── main key handling ─────────────────────────────────────────────────────────
-
-/// Dispatches a non-modal key event: tab switching, per-tab vertical/page
-/// navigation, and the global shortcuts (sync, release, open-in-browser,
-/// clipboard copies, stash) listed in the detail view's help text.
 pub fn handle_key(code: KeyCode, st: &mut St) {
     st.status_msg = None;
     match code {
         KeyCode::Char('q') | KeyCode::Esc => st.quit = true,
 
-        // Tab switching: Tab, arrows, number keys
         KeyCode::Tab | KeyCode::Right => {
             st.tab = st.tab.next();
             maybe_load_settings(st);
@@ -292,7 +272,6 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
         }
         KeyCode::Char('9') => { st.tab = Tab::Todos; }
 
-        // Vertical navigation
         KeyCode::Down | KeyCode::Char('j') => match st.tab {
             Tab::Overview  => st.ov_off  = st.ov_off.saturating_add(1),
             Tab::Commits   => {
@@ -358,7 +337,6 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
             _ => {}
         },
 
-        // Enter
         KeyCode::Enter => match st.tab {
             Tab::Files => {
                 if let Some(&ni) = st.tree_visible.get(st.tree_cursor) {
@@ -409,7 +387,6 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
             _ => {}
         },
 
-        // Branch-specific keys
         KeyCode::Char('D') if st.tab == Tab::Branches => {
             if let Some(b) = st.branches.get(st.branch_cursor) {
                 if b.is_current {
@@ -428,7 +405,6 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
             st.modal = DetailModal::NewBranch { input: String::new(), error: None };
         }
 
-        // Stats period change
         KeyCode::Char('p') if st.tab == Tab::Stats => {
             st.stats_period = st.stats_period.next();
             st.stats_off = 0;
@@ -445,14 +421,12 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
             st.run_action = Some(41);
         }
 
-        // Preview scroll (Files tab, right panel)
         KeyCode::Char(']') if st.tab == Tab::Files => {
             st.preview_off = st.preview_off.saturating_add(5);
         }
         KeyCode::Char('[') if st.tab == Tab::Files => {
             st.preview_off = st.preview_off.saturating_sub(5);
         }
-        // Open selected file in editor (Files tab)
         KeyCode::Char('e') if st.tab == Tab::Files => {
             if let Some(&ni) = st.tree_visible.get(st.tree_cursor) {
                 let node = &st.tree_nodes[ni];
@@ -464,7 +438,6 @@ pub fn handle_key(code: KeyCode, st: &mut St) {
             }
         }
 
-        // Global actions
         KeyCode::Char('s') => {
             st.modal = DetailModal::SelectOption {
                 title: "Sync".into(),

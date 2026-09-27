@@ -1,16 +1,9 @@
-//! Persistent application settings (`~/.vulp/config.toml`): workspace
-//! location, defaults for new repos, editor/clipboard preferences, and the
-//! one-time migration from the legacy `~/.fxg` data directory.
-
 pub mod ui;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// All persisted user settings. Loaded once at startup and threaded through
-/// the rest of the app; the hub's HubSettings tab edits a copy and calls
-/// `save_config` to persist changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub workspace_root:      PathBuf,
@@ -26,54 +19,28 @@ pub struct AppConfig {
     pub share_stats:         bool,
     pub timezone:            String,
     pub vsc_data_dir:        PathBuf,
-    /// Folder names inside workspace_root treated as organisational groups.
-    /// Their direct children are scanned as repos, not the group folder itself.
-    /// Example: ["clients", "internal", "opensource"]
-    #[serde(default)]
-    pub workspace_groups:    Vec<String>,
-    /// Shell command used to copy text to clipboard (e.g. "wl-copy" or "xclip -selection clipboard").
     #[serde(default = "default_clipboard_cmd")]
     pub clipboard_cmd:       String,
-    /// Count lines-of-code during workspace scan (slow for large repos; off by default).
     #[serde(default)]
     pub show_locs:           bool,
-    /// Copyright holder written into generated LICENSE files
-    /// (empty = fall back to `git config user.name`, then `username`).
     #[serde(default)]
     pub license_holder:      String,
-    /// Default template for the add-LICENSE action: "mit" or "apache-2.0".
     #[serde(default = "default_license_kind")]
     pub default_license:     String,
-    /// Repos (display name or dir basename, case-insensitive) that mutating
-    /// CLI commands refuse to touch unless `--force` is passed.
     #[serde(default)]
     pub protected_repos:     Vec<String>,
-    /// Author emails counted as "you" for streak/heatmap/digest stats.
-    /// Empty = fall back to `git config user.email`, then `email`. GitHub's
-    /// no-reply address for each configured account is always matched too.
     #[serde(default)]
     pub stats_author_emails: Vec<String>,
-    /// Command (program + args, split on whitespace) that runs its final
-    /// argument as a shell command on the deploy host and prints stdout —
-    /// e.g. a wrapper around `ssh`. Empty = deploy-drift feature disabled.
     #[serde(default)]
     pub deploy_ssh_cmd:      String,
-    /// Root on the deploy host that mirrors `workspace_root` 1:1 (relative
-    /// paths past these two roots are identical). Empty = feature disabled.
     #[serde(default)]
     pub deploy_root:         String,
-    /// Hide vendored/reference clones (repos with zero of your own commits,
-    /// classified on `[R]`) from the Repos list. A durable preference rather
-    /// than a transient filter, so it lives here and not in the session file.
     #[serde(default)]
     pub hide_external_clones: bool,
 }
 
 fn default_license_kind() -> String { "mit".into() }
 
-/// Picks the first available clipboard tool on PATH as the default
-/// `clipboard_cmd`, so a fresh install works without manual configuration
-/// on most systems.
 fn default_clipboard_cmd() -> String {
     for cmd in &["wl-copy", "xclip", "pbcopy"] {
         if std::process::Command::new("which").arg(cmd).output().map(|o| o.status.success()).unwrap_or(false) {
@@ -96,11 +63,10 @@ impl Default for AppConfig {
             username:           String::new(),
             email:              String::new(),
             gitignore_template: "node".into(),
-            readme_template:    "heartbyte-default".into(),
+            readme_template:    "default".into(),
             share_stats:        false,
             timezone:           "Europe/Warsaw".into(),
             vsc_data_dir:       home.join(".vulp/vsc-data"),
-            workspace_groups:   vec![],
             clipboard_cmd:      default_clipboard_cmd(),
             show_locs:          false,
             license_holder:     String::new(),
@@ -115,8 +81,6 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Lists every editable setting as a `(key, display value)` pair, in
-    /// the order shown by the Config TUI's field list.
     pub fn fields(&self) -> Vec<(&'static str, String)> {
         vec![
             ("workspace_root",     self.workspace_root.to_string_lossy().into()),
@@ -132,7 +96,6 @@ impl AppConfig {
             ("share_stats",        self.share_stats.to_string()),
             ("timezone",           self.timezone.clone()),
             ("vsc_data_dir",       self.vsc_data_dir.to_string_lossy().into()),
-            ("workspace_groups",   self.workspace_groups.join(", ")),
             ("license_holder",     self.license_holder.clone()),
             ("default_license",    self.default_license.clone()),
             ("protected_repos",    self.protected_repos.join(", ")),
@@ -143,9 +106,6 @@ impl AppConfig {
         ]
     }
 
-    /// Sets one field by its `fields()` key name from a freeform string
-    /// (as typed into the Config TUI's edit prompt). Errors on an unknown
-    /// key rather than silently ignoring a typo.
     pub fn set_field(&mut self, key: &str, value: String) -> Result<()> {
         match key {
             "workspace_root"     => self.workspace_root     = PathBuf::from(&value),
@@ -180,20 +140,12 @@ impl AppConfig {
             "deploy_ssh_cmd"     => self.deploy_ssh_cmd     = value,
             "deploy_root"        => self.deploy_root        = value,
             "hide_external_clones" => self.hide_external_clones = value == "true",
-            "workspace_groups"   => {
-                self.workspace_groups = value
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
             other => anyhow::bail!("unknown config key: {}", other),
         }
         Ok(())
     }
 }
 
-/// Path to the config file, `~/.vulp/config.toml`.
 pub fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
@@ -201,64 +153,6 @@ pub fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
-/// The pre-rename data directory, kept only so `migrate_legacy_config` can
-/// detect and import it once.
-fn legacy_data_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".fxg")
-}
-
-/// One-time migration from the old `fxg` data directory: if `~/.vulp` doesn't
-/// exist yet but `~/.fxg` does, copy it over wholesale (config, accounts,
-/// tokens, projects, workspaces, cache) so upgrading users keep their setup.
-/// The old directory is left untouched as a safety fallback.
-pub fn migrate_legacy_config() -> Result<Option<PathBuf>> {
-    let new_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")).join(".vulp");
-    let old_dir = legacy_data_dir();
-    if new_dir.exists() || !old_dir.exists() {
-        return Ok(None);
-    }
-    copy_dir_recursive(&old_dir, &new_dir)?;
-
-    // The copied config.toml still has data_dir/vsc_data_dir pointing at the
-    // old ~/.fxg paths — repoint them at the new location so accounts.toml
-    // and friends (which read cfg.data_dir) don't silently keep writing there.
-    let cfg_path = new_dir.join("config.toml");
-    if cfg_path.exists() {
-        if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
-            if let Ok(mut cfg) = toml::from_str::<AppConfig>(&raw) {
-                if cfg.data_dir == old_dir {
-                    cfg.data_dir = new_dir.clone();
-                }
-                if cfg.vsc_data_dir == old_dir.join("vsc-data") {
-                    cfg.vsc_data_dir = new_dir.join("vsc-data");
-                }
-                let _ = std::fs::write(&cfg_path, toml::to_string_pretty(&cfg)?);
-            }
-        }
-    }
-    Ok(Some(old_dir))
-}
-
-/// Recursively copies every file and subdirectory from `src` into `dst`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let target = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), &target)?;
-        }
-    }
-    Ok(())
-}
-
-/// Loads the config file, or `AppConfig::default()` if it doesn't exist yet
-/// (first run).
 pub fn load_config() -> Result<AppConfig> {
     let path = config_path();
     if path.exists() {
@@ -269,7 +163,6 @@ pub fn load_config() -> Result<AppConfig> {
     }
 }
 
-/// Writes `cfg` to the config file, creating `~/.vulp/` if needed.
 pub fn save_config(cfg: &AppConfig) -> Result<()> {
     let path = config_path();
     ensure_parent(&path)?;
@@ -277,7 +170,6 @@ pub fn save_config(cfg: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// Creates `cfg.data_dir` and `cfg.vsc_data_dir` if they don't already exist.
 #[allow(dead_code)]
 pub fn ensure_data_dir(cfg: &AppConfig) -> Result<()> {
     std::fs::create_dir_all(&cfg.data_dir)?;
@@ -292,10 +184,95 @@ fn ensure_parent(p: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Entry point for `vulp config`: opens the interactive settings TUI and
-/// persists whatever the user changed.
 pub async fn run(cfg: AppConfig) -> Result<()> {
     let updated = ui::run_config_tui(cfg)?;
     save_config(&updated)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_field_can_be_set_back() {
+        let mut cfg = AppConfig::default();
+        for (key, value) in cfg.clone().fields() {
+            cfg.set_field(key, value.clone()).unwrap_or_else(|e| panic!("{key}: {e}"));
+            let after = cfg.fields().into_iter().find(|(k, _)| *k == key).unwrap().1;
+            assert_eq!(after, value, "{key}");
+        }
+    }
+
+    #[test]
+    fn list_and_bool_fields_are_parsed() {
+        let mut cfg = AppConfig::default();
+        cfg.set_field("protected_repos", " api, ,web ".into()).unwrap();
+        assert_eq!(cfg.protected_repos, ["api", "web"]);
+        cfg.set_field("stats_author_emails", "me@example.com,alt@example.com".into()).unwrap();
+        assert_eq!(cfg.stats_author_emails.len(), 2);
+        cfg.set_field("hide_external_clones", "true".into()).unwrap();
+        assert!(cfg.hide_external_clones);
+        cfg.set_field("share_stats", "yes".into()).unwrap();
+        assert!(!cfg.share_stats);
+        cfg.set_field("workspace_root", "/tmp/ws".into()).unwrap();
+        assert_eq!(cfg.workspace_root, PathBuf::from("/tmp/ws"));
+    }
+
+    #[test]
+    fn unknown_keys_are_errors() {
+        let err = AppConfig::default().set_field("workspace_rot", "x".into()).unwrap_err();
+        assert!(err.to_string().contains("workspace_rot"));
+    }
+
+    #[test]
+    fn minimal_config_file_fills_optional_fields_with_defaults() {
+        let raw = r#"
+            workspace_root = "/ws"
+            data_dir = "/home/u/.vulp"
+            default_provider = "gitea"
+            default_branch = "main"
+            default_visibility = "public"
+            editor = "nvim"
+            username = "u"
+            email = "u@example.com"
+            gitignore_template = "rust"
+            readme_template = "default"
+            share_stats = false
+            timezone = "UTC"
+            vsc_data_dir = "/home/u/.vulp/vsc-data"
+        "#;
+        let cfg: AppConfig = toml::from_str(raw).unwrap();
+        assert_eq!(cfg.default_provider, "gitea");
+        assert_eq!(cfg.default_license, "mit");
+        assert!(cfg.protected_repos.is_empty());
+        assert!(cfg.deploy_ssh_cmd.is_empty() && cfg.deploy_root.is_empty());
+        assert!(!cfg.hide_external_clones);
+
+        let reparsed: AppConfig = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        assert_eq!(reparsed.fields(), cfg.fields());
+    }
+
+    #[test]
+    fn config_with_removed_keys_still_loads() {
+        let raw = r#"
+            workspace_root = "/ws"
+            data_dir = "/home/u/.vulp"
+            default_provider = "github"
+            default_branch = "main"
+            default_visibility = "private"
+            editor = "vim"
+            username = "u"
+            email = "u@example.com"
+            gitignore_template = "node"
+            readme_template = "default"
+            share_stats = false
+            timezone = "UTC"
+            vsc_data_dir = "/home/u/.vulp/vsc-data"
+            workspace_groups = ["clients"]
+        "#;
+        let cfg: AppConfig = toml::from_str(raw).unwrap();
+        assert_eq!(cfg.workspace_root, PathBuf::from("/ws"));
+        assert!(!toml::to_string_pretty(&cfg).unwrap().contains("workspace_groups"));
+    }
 }

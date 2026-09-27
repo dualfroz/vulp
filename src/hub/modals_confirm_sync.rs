@@ -1,17 +1,9 @@
-//! `process_modal_confirm` arms for sort/filter, repo creation entry points,
-//! select-by-condition, the in-TUI sync flow, the contextual [m] action menu
-//! (incl. PR/Issue creation), and the code-intelligence action chain.
-
 use super::modals_spawn::{
     spawn_convention_preview, spawn_create_issue, spawn_create_pr, spawn_find_usages,
     spawn_list_functions, spawn_repo_stats, spawn_rename_preview,
 };
 use super::state::{ConfirmTag, HubState, MenuAction, Modal, PhaseResult, SelectTag, SortMode, TextTag};
 
-/// Handles one step of a sort/filter, repo-creation, sync, Quick Actions, or
-/// code-intel modal chain. Returns `None` once `modal` has been consumed by
-/// one of this file's arms, or `Some(modal)` unchanged so the next file in
-/// the chain (see `modals::process_modal_confirm`) can try it.
 pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
     match modal {
         Modal::Select { cursor, tag: SelectTag::SortFilter, .. } => {
@@ -89,14 +81,13 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Hub sync via in-TUI modals ────────────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::SyncAction, .. } => {
             match cursor {
-                0 => { // Pull
+                0 => {
                     state.pending_sync_action = Some("pull".into());
                     state.pending_phase = Some(PhaseResult::ExecSync);
                 }
-                1 => { // Commit+Push
+                1 => {
                     state.pending_sync_action = Some("commit_push".into());
                     state.modal = Modal::Text {
                         title: "Sync — Commit Message".into(),
@@ -106,7 +97,7 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                         max_len: None,
                     };
                 }
-                _ => { // Push only
+                _ => {
                     state.pending_sync_action = Some("push_only".into());
                     state.pending_phase = Some(PhaseResult::ExecSync);
                 }
@@ -119,14 +110,9 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Contextual [m] action menu ─────────────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::ActionMenu(actions), .. } => {
             match actions.get(cursor) {
                 Some(MenuAction::Key(k)) => {
-                    // Re-dispatch the entry's key through the global keymap.
-                    // `state.modal` is already None here (mem::replace in
-                    // process_modal_confirm), so a follow-up modal opened by
-                    // the handler lands cleanly.
                     if let Some(phase) = super::keys_dispatch::handle_global_key(state, *k) {
                         state.pending_phase = Some(phase);
                     }
@@ -190,7 +176,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                     let path = repo.path.clone();
                     let name = repo.name.clone();
                     if crate::util::git::git_run_ok(&path, args) {
-                        // Point-refresh just this repo — no full rescan needed.
                         if let Ok(fresh) = crate::status::repo_summary(&path) {
                             let bookmarked = state.repos[ri].bookmarked;
                             let (stars, oi, op) = (state.repos[ri].stars, state.repos[ri].open_issues, state.repos[ri].open_prs);
@@ -210,7 +195,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Add LICENSE ([m] action, bulk over action_targets) ────────────────
         Modal::Select { cursor, tag: SelectTag::LicenseKind { targets }, .. } => {
             let kind = if cursor == 1 { crate::license::LicenseKind::Apache2 } else { crate::license::LicenseKind::Mit };
             let names: Vec<&str> = targets.iter().take(6)
@@ -242,7 +226,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                     Ok(crate::license::WriteOutcome::Written) => {
                         written += 1;
                         state.repos[ri].has_license = true;
-                        // New untracked LICENSE file — the repo is dirty now.
                         state.repos[ri].is_dirty = true;
                         crate::activity::log(&crate::activity::ActivityEntry {
                             ts:     chrono::Utc::now().timestamp(),
@@ -326,7 +309,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Code intelligence (Stats tab, [m]) ─────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::CodeIntelRepoPick, .. } => {
             if let Some(r) = state.repos.get(cursor) {
                 let repo = r.path.clone();

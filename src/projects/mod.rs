@@ -1,18 +1,13 @@
-//! User-defined project groupings (`~/.vulp/projects.toml`): named, colored
-//! collections of repos (by workspace-relative path) that the hub's
-//! Projects tab lets you create, assign repos to, and filter by.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// One project: a name, a display color, and the set of repos assigned to it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name:  String,
-    pub color: String,        // hex e.g. "#e74c3c"
+    pub color: String,
     #[serde(default)]
-    pub repos: Vec<String>,   // relative paths from workspace_root
+    pub repos: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -25,8 +20,6 @@ fn file_path() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".vulp").join("projects.toml")
 }
 
-/// Loads every project from disk, or an empty list if the file doesn't
-/// exist or fails to parse.
 pub fn load() -> Vec<Project> {
     let p = file_path();
     if !p.exists() { return Vec::new(); }
@@ -35,7 +28,6 @@ pub fn load() -> Vec<Project> {
         .unwrap_or_default()
 }
 
-/// Overwrites the projects file with `projects`.
 pub fn save(projects: &[Project]) -> anyhow::Result<()> {
     let p = file_path();
     if let Some(parent) = p.parent() { std::fs::create_dir_all(parent)?; }
@@ -44,7 +36,6 @@ pub fn save(projects: &[Project]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Returns map of relative_repo_path → project index for O(1) lookup.
 pub fn index_by_repo(projects: &[Project]) -> HashMap<String, usize> {
     let mut m = HashMap::new();
     for (i, p) in projects.iter().enumerate() {
@@ -55,7 +46,6 @@ pub fn index_by_repo(projects: &[Project]) -> HashMap<String, usize> {
     m
 }
 
-/// Relative path of repo_path from workspace_root, as the key used in projects.
 pub fn rel_key(repo_path: &Path, workspace_root: &Path) -> String {
     repo_path.strip_prefix(workspace_root)
         .unwrap_or(repo_path)
@@ -63,7 +53,6 @@ pub fn rel_key(repo_path: &Path, workspace_root: &Path) -> String {
         .to_string()
 }
 
-/// Parse "#rrggbb" → (u8, u8, u8). Falls back to white.
 pub fn hex_to_rgb(color: &str) -> (u8, u8, u8) {
     let s = color.trim_start_matches('#');
     if s.len() == 6 {
@@ -76,4 +65,36 @@ pub fn hex_to_rgb(color: &str) -> (u8, u8, u8) {
         }
     }
     (180, 180, 180)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_colors_parse_with_a_grey_fallback() {
+        assert_eq!(hex_to_rgb("#e74c3c"), (0xe7, 0x4c, 0x3c));
+        assert_eq!(hex_to_rgb("3DA7FF"), (0x3d, 0xa7, 0xff));
+        assert_eq!(hex_to_rgb("#fff"), (180, 180, 180));
+        assert_eq!(hex_to_rgb("#zzzzzz"), (180, 180, 180));
+    }
+
+    #[test]
+    fn repo_keys_are_workspace_relative() {
+        let root = Path::new("/ws");
+        assert_eq!(rel_key(Path::new("/ws/clients/acme"), root), "clients/acme");
+        assert_eq!(rel_key(Path::new("/elsewhere/x"), root), "/elsewhere/x");
+    }
+
+    #[test]
+    fn index_maps_each_repo_to_its_project() {
+        let projects = vec![
+            Project { name: "a".into(), color: "#000000".into(), repos: vec!["x".into(), "y".into()] },
+            Project { name: "b".into(), color: "#ffffff".into(), repos: vec!["z".into()] },
+        ];
+        let idx = index_by_repo(&projects);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx["y"], 0);
+        assert_eq!(idx["z"], 1);
+    }
 }

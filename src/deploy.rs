@@ -1,27 +1,15 @@
-//! Deploy drift: is what's on the deploy host actually what's in the repo?
-//! Auto-discovered from a 1:1 mirror convention (`deploy_root` on the host
-//! mirrors `workspace_root` locally past those two roots) rather than
-//! per-repo metadata the user would have to maintain by hand — one batched
-//! remote command lists every mirrored repo's HEAD sha, and repos with no
-//! mirror (never deployed there — e.g. this very tool, which is a pure
-//! open-source dev CLI) simply have no entry, not an error.
-
 use crate::config::AppConfig;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// One repo's drift relative to the deploy host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeployState {
     InSync,
     Behind(u32),
-    /// The deployed sha isn't reachable from local HEAD — a rebase, a
-    /// force-push, or (as happened to this very repo) a history rewrite.
     Diverged,
 }
 
 impl DeployState {
-    /// Stable string form for the on-disk cache and `--json` output.
     pub fn as_str(&self) -> String {
         match self {
             Self::InSync    => "in_sync".into(),
@@ -37,26 +25,17 @@ impl DeployState {
     }
 }
 
-/// Whether the feature is configured at all (`deploy_ssh_cmd` + `deploy_root`
-/// both set). Callers should skip the SSH round-trip entirely when this is
-/// false rather than attempting it and failing.
 pub fn is_configured(cfg: &AppConfig) -> bool {
     !cfg.deploy_ssh_cmd.trim().is_empty() && !cfg.deploy_root.trim().is_empty()
 }
 
-/// Runs `deploy_ssh_cmd` once to list every git repo under `deploy_root` on
-/// the deploy host with its current HEAD sha, keyed by path relative to
-/// `deploy_root`. One round-trip covers every repo — the whole point of the
-/// mirror convention is never needing a request per repo. `None` when the
-/// feature isn't configured or the command fails outright (transient SSH
-/// drops are retried once, per the known flakiness of this specific setup).
 pub fn scan_deploy_heads(cfg: &AppConfig) -> Option<HashMap<String, String>> {
     if !is_configured(cfg) { return None; }
     let root = cfg.deploy_root.trim().trim_end_matches('/');
     let remote_script = format!(
         "find {root} -maxdepth 10 -type d -name .git 2>/dev/null | while IFS= read -r g; do \
-         d=$(dirname \"$g\"); sha=$(git -C \"$d\" rev-parse HEAD 2>/dev/null); \
-         printf '%s\\x1f%s\\n' \"$d\" \"$sha\"; done"
+         d=$(dirname \"$g\"); sha=$(git -C \"$d\" rev-parse --verify -q HEAD 2>/dev/null); \
+         printf '%s\\037%s\\n' \"$d\" \"$sha\"; done"
     );
 
     let mut parts = cfg.deploy_ssh_cmd.split_whitespace();
@@ -72,7 +51,6 @@ pub fn scan_deploy_heads(cfg: &AppConfig) -> Option<HashMap<String, String>> {
         if !out.status.success() { return None; }
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    // One retry — this VPS's SSH is known to drop intermittently.
     let output = run().or_else(run)?;
 
     let mut heads = HashMap::new();
@@ -86,7 +64,6 @@ pub fn scan_deploy_heads(cfg: &AppConfig) -> Option<HashMap<String, String>> {
     Some(heads)
 }
 
-/// The local repo's own HEAD sha.
 fn local_head_sha(path: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C").arg(path).args(["rev-parse", "HEAD"])
@@ -96,11 +73,12 @@ fn local_head_sha(path: &Path) -> Option<String> {
     if sha.is_empty() { None } else { Some(sha) }
 }
 
-/// How many commits `deployed_sha` is behind local HEAD, or `None` if
-/// `deployed_sha` isn't an ancestor reachable from HEAD at all (rebase,
-/// force-push, or a history rewrite like this repo's own `filter-repo` run —
-/// in that case there's no meaningful count, only "diverged").
 fn commits_behind(path: &Path, deployed_sha: &str) -> Option<u32> {
+    let is_ancestor = std::process::Command::new("git")
+        .arg("-C").arg(path)
+        .args(["merge-base", "--is-ancestor", deployed_sha, "HEAD"])
+        .output().ok()?;
+    if !is_ancestor.status.success() { return None; }
     let out = std::process::Command::new("git")
         .arg("-C").arg(path)
         .args(["rev-list", "--count", &format!("{deployed_sha}..HEAD")])
@@ -109,10 +87,6 @@ fn commits_behind(path: &Path, deployed_sha: &str) -> Option<u32> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
-/// Computes drift for one repo. `None` = no mirror found on the deploy host
-/// (not applicable — e.g. a pure open-source component that never runs
-/// live) or the feature isn't configured; distinguishing "not deployed"
-/// from "checked, in sync" is the whole reason this returns `Option`.
 pub fn drift_for(
     repo_path: &Path, workspace_root: &Path, deploy_heads: &HashMap<String, String>,
 ) -> Option<DeployState> {
@@ -125,5 +99,100 @@ pub fn drift_for(
     match commits_behind(repo_path, deployed_sha) {
         Some(n) => Some(DeployState::Behind(n)),
         None    => Some(DeployState::Diverged),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::testgit::{commit_file, git, init_repo};
+
+    #[test]
+    fn state_string_form_round_trips() {
+        for state in [DeployState::InSync, DeployState::Behind(0), DeployState::Behind(42), DeployState::Diverged] {
+            assert_eq!(DeployState::parse(&state.as_str()), Some(state));
+        }
+        assert_eq!(DeployState::Behind(3).as_str(), "behind:3");
+        for junk in ["", "behind:", "behind:x", "behind:-1", "ahead:2", "IN_SYNC"] {
+            assert_eq!(DeployState::parse(junk), None, "{junk}");
+        }
+    }
+
+    #[test]
+    fn feature_needs_both_command_and_root() {
+        let mut cfg = AppConfig::default();
+        assert!(!is_configured(&cfg));
+        cfg.deploy_ssh_cmd = "ssh host".into();
+        assert!(!is_configured(&cfg));
+        cfg.deploy_root = "   ".into();
+        assert!(!is_configured(&cfg));
+        cfg.deploy_root = "/srv".into();
+        assert!(is_configured(&cfg));
+        assert_eq!(scan_deploy_heads(&AppConfig::default()), None);
+    }
+
+    #[test]
+    fn drift_against_a_deployed_sha() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        let repo = init_repo(&workspace.join("group/app"));
+        let first = commit_file(&repo, "a.txt", "1", "one");
+        let mut heads = HashMap::new();
+
+        assert_eq!(drift_for(&repo, &workspace, &heads), None);
+
+        heads.insert("group/app".to_string(), first.clone());
+        assert_eq!(drift_for(&repo, &workspace, &heads), Some(DeployState::InSync));
+
+        commit_file(&repo, "a.txt", "2", "two");
+        commit_file(&repo, "a.txt", "3", "three");
+        assert_eq!(drift_for(&repo, &workspace, &heads), Some(DeployState::Behind(2)));
+
+        git(&repo, &["checkout", "-q", "--orphan", "rewritten"]);
+        commit_file(&repo, "b.txt", "x", "rewritten history");
+        assert_eq!(drift_for(&repo, &workspace, &heads), Some(DeployState::Diverged));
+
+        heads.insert("group/app".to_string(), "0".repeat(40));
+        assert_eq!(drift_for(&repo, &workspace, &heads), Some(DeployState::Diverged));
+
+        let outside = init_repo(&dir.path().join("elsewhere"));
+        commit_file(&outside, "c.txt", "c", "c");
+        assert_eq!(drift_for(&outside, &workspace, &heads), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scans_mirrored_heads_with_one_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let deploy_root = dir.path().join("srv");
+        let api = init_repo(&deploy_root.join("clients/api"));
+        let api_head = commit_file(&api, "main.rs", "fn main() {}", "api");
+        let site = init_repo(&deploy_root.join("site"));
+        let site_head = commit_file(&site, "index.html", "<html>", "site");
+        init_repo(&deploy_root.join("empty"));
+        std::fs::create_dir_all(deploy_root.join("not-a-repo")).unwrap();
+
+        let cfg = AppConfig {
+            deploy_ssh_cmd: "sh -c".into(),
+            deploy_root: format!("{}/", deploy_root.display()),
+            ..AppConfig::default()
+        };
+        let heads = scan_deploy_heads(&cfg).expect("command succeeds");
+        let expected: HashMap<String, String> = [
+            ("clients/api".to_string(), api_head),
+            ("site".to_string(), site_head),
+        ].into_iter().collect();
+        assert_eq!(heads, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failing_remote_command_disables_drift() {
+        let cfg = AppConfig {
+            deploy_ssh_cmd: "false".into(),
+            deploy_root: "/srv".into(),
+            ..AppConfig::default()
+        };
+        assert_eq!(scan_deploy_heads(&cfg), None);
     }
 }

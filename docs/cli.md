@@ -1,11 +1,11 @@
-# vulp CLI — reference
+# vulp CLI - reference
 
 Complete non-interactive surface. Written for machine consumers (AI agents,
 scripts) as much as humans: every read command supports `--json`, nothing
 ever prompts, and exit codes are meaningful.
 
 ```
-vulp                    # no args → interactive TUI (humans)
+vulp                    # no args -> interactive TUI (humans)
 vulp <command> [--json] # non-interactive (scripts/AI)
 ```
 
@@ -14,11 +14,11 @@ vulp <command> [--json] # non-interactive (scripts/AI)
 - **`--json`** (global flag): machine-readable JSON on stdout. Available on:
   `list`, `status`, `scan`, `brief`, `stats`, `activity`, `todo list`,
   `pr list`, `issue list`, `project list`, `accounts`, `refresh`,
-  `repo license`.
+  `repo license`, `digest`.
 - **No prompts, ever.** Missing input = error + non-zero exit.
 - **stdout** = results only. **stderr** = progress and errors.
-- **Exit codes:** `0` ok · `1` execution error · `2` bad usage ·
-  `3` auth missing/invalid · `4` not found (repo/todo/project).
+- **Exit codes:** `0` ok, `1` execution error, `2` bad usage,
+  `3` auth missing/invalid, `4` not found (repo/todo/project).
 - Repo arguments match the display label **or** the directory basename,
   case-insensitively (e.g. `vulp status vulp` matches "Vulp - Open Source!").
 - Mutating commands write to the same `~/.vulp/activity.log` as the TUI,
@@ -37,7 +37,7 @@ vulp <command> [--json] # non-interactive (scripts/AI)
   changes that look like credentials (see Git operations); override with
   `--allow-secrets`.
 - **Discord webhook secret**: `vulp digest webhook <url>` stores the URL in
-  `~/.vulp/.tokens` (mode 0600) the same way provider tokens are stored —
+  `~/.vulp/.tokens` (mode 0600) the same way provider tokens are stored -
   never in `config.toml`, never printed back, never logged. Whoever has the
   URL can post to (and edit/delete messages in) that channel.
 - **`VULP_AGENT`** (env var, any non-empty value): every activity-log entry
@@ -61,7 +61,8 @@ vulp activity [--limit N] [--kind push|pull|release|"new repo"|todo|pr|issue|com
 [{ "name": "...", "path": "...", "branch": "main", "ahead": 0, "behind": 0,
    "is_dirty": true, "last_commit_msg": "...", "last_commit_age": "2h ago",
    "last_commit_ts": 1780000000, "last_tag": null, "visibility": null,
-   "owner": "dualfroz", "has_license": false, "lang": "TypeScript 96%",
+   "branch_count": 1, "owner": "octocat", "remote_repo_name": "hello-world",
+   "has_license": false, "lang": "TypeScript 96%",
    "bookmarked": false, "stars": null, "open_issues": null, "open_prs": null,
    "stash_count": 0, "ci_status": "success", "dependabot_open": 0,
    "deploy_status": "behind:3" }]
@@ -74,12 +75,12 @@ alert endpoint isn't available for that repo's owner (personal account,
 missing token scope, or feature disabled) as opposed to `0` = "checked, none
 open". `--alerts` filters to repos with `dependabot_open > 0`.
 
-`deploy_status` is `"in_sync" | "behind:N" | "diverged" | null` — see
+`deploy_status` is `"in_sync" | "behind:N" | "diverged" | null` - see
 **Deploy drift** below. `--stale-deploy` filters to repos that are `behind`
 or `diverged` (excludes `in_sync` and `null`/not-applicable).
 
 `--no-external` hides vendored/reference clones (repos you have **zero of your
-own commits** in — e.g. an upstream `pterodactyl` you cloned but never pushed
+own commits** in - e.g. an upstream `pterodactyl` you cloned but never pushed
 to); `--external` shows only those. Classification is measured on `vulp refresh`
 (a git-side `--author` scan of your identities, cached in `stats_cache.toml`);
 before the first refresh nothing is classified and both flags match nothing. A
@@ -90,22 +91,22 @@ external. In the TUI this is the `x` key / the `⧉` marker, and the persistent
 ## Deploy drift
 
 Auto-discovered, not manually configured: if `deploy_root` (config) mirrors
-`workspace_root` 1:1 on a remote host (e.g. `/opt/projects/X/Y` on the host
-↔ `{workspace_root}/X/Y` locally), and `deploy_ssh_cmd` (config) is a command
+`workspace_root` 1:1 on a remote host (e.g. `/srv/projects/X/Y` on the host
+and `{workspace_root}/X/Y` locally), and `deploy_ssh_cmd` (config) is a command
 that runs its final argument as a shell command on that host and prints the
 result (a wrapper around `ssh`), `vulp refresh` runs **one** batched remote
 command listing every mirrored repo's HEAD sha, then compares each against
-local HEAD. A repo with no mirror on the host (nothing to compare against —
+local HEAD. A repo with no mirror on the host (nothing to compare against -
 e.g. a pure open-source component that never runs live anywhere) simply has
 `deploy_status: null`, not an error.
 
 ```toml
 # ~/.vulp/config.toml
-deploy_ssh_cmd = "python3 /path/to/vps_exec.py"   # appends the remote command as its last arg
-deploy_root    = "/opt/projects"
+deploy_ssh_cmd = "ssh deploy@deploy.example.com"   # the remote command is appended as the last argument
+deploy_root    = "/srv/projects"
 ```
 
-Both empty (the default) disables the feature entirely — no SSH attempted.
+Both empty (the default) disables the feature entirely - no SSH attempted.
 
 ## Git operations
 
@@ -145,7 +146,7 @@ vulp project rm NAME
 ## Provider API (needs `vulp auth import` first)
 
 ```
-vulp pr list [--repo R] [--json]        # cached — run `vulp refresh` for fresh
+vulp pr list [--repo R] [--json]        # cached - run `vulp refresh` for fresh
 vulp pr create --repo R --title T --head BRANCH [--base main]
 vulp issue list [--repo R] [--json]
 vulp issue create --repo R --title T [--body "..."]
@@ -154,7 +155,7 @@ vulp init NAME [--private] [--description "..."]   # local init + create remote 
 vulp accounts [--json]
 ```
 
-`pr/issue list` read the on-disk cache (`~/.vulp/`) — the same one the TUI
+`pr/issue list` read the on-disk cache (`~/.vulp/`) - the same one the TUI
 uses; run `vulp refresh` first when freshness matters.
 
 ## Auth (non-interactive account management)
@@ -169,7 +170,7 @@ vulp auth test [<account>]                                # verify a token still
 
 `--url` is for self-hosted GitLab/Gitea instances; omit it for github.com/gitlab.com.
 Every subcommand here is fully non-interactive (no prompts) and usable from
-scripts/CI without ever touching `gh` — `vulp auth import` is the convenience
+scripts/CI without ever touching `gh` - `vulp auth import` is the convenience
 path when `gh` is already authenticated, `add` is the direct path when it isn't.
 
 ## Per-repo utilities
@@ -187,7 +188,7 @@ vulp repo license --all                 # every repo missing a license
 ```
 
 `repo license` writes a `LICENSE` file into each target repo. It never
-overwrites an existing license (reported as skipped) and never commits —
+overwrites an existing license (reported as skipped) and never commits -
 review and commit the file yourself. Defaults come from config:
 `default_license` (mit) and `license_holder` (falls back to
 `git config user.name`, then the account username).
@@ -197,13 +198,13 @@ review and commit the file yourself. Defaults come from config:
 ```
 vulp digest [--json]                    # build + print this week's digest, archive to ~/.vulp/digests/
 vulp digest send discord                # also POST it to the saved Discord webhook
-vulp digest webhook <url>               # store/replace the webhook URL (secret — see Guardrails)
+vulp digest webhook <url>               # store/replace the webhook URL (secret - see Guardrails)
 ```
 
-The digest counts only **your own** commits — filtered by `stats_author_emails`
+The digest counts only **your own** commits - filtered by `stats_author_emails`
 (config; falls back to `git config user.email`) plus each configured
-account's GitHub no-reply address — not every commit in the workspace
-(most repos here are 90%+ upstream/fork history). It reports: own commits
+account's GitHub no-reply address - not every commit in the workspace, so
+upstream history in forks and clones does not inflate it. It reports: own commits
 this week vs last week, active days, current streak, top 3 repos by own
 commits, local tags created this week, PR/issue open+merged/closed counts
 (provider search API, needs an account), and todos added/done. Every build

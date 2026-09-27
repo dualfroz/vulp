@@ -1,7 +1,3 @@
-//! The hub's Stats and Activity tabs: a workspace-wide commit bar chart plus
-//! language/top-repo/day-of-week breakdowns (Stats), and the merged
-//! commit/PR/issue/local-event feed (Activity).
-
 use crate::status::format_age_pub;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -22,8 +18,6 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    // LEFT is split: your author-filtered contribution graph on top, the
-    // period commit bar chart below it.
     let left_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(13), Constraint::Min(3)])
@@ -52,7 +46,6 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
             ]));
             left_lines.push(Line::from(""));
 
-            // Simple text bar chart
             let max_count: usize = gs.activity.iter().map(|(_, c)| *c).max().unwrap_or(1).max(1);
             let bar_h = (chart_area.height as usize).saturating_sub(6).max(4);
             let data = &gs.activity;
@@ -61,8 +54,7 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
             let step = if n > bar_w { (n / bar_w).max(1) } else { 1 };
             let sampled: Vec<&(String, usize)> = data.iter().step_by(step).collect();
             let bar_count = sampled.len().min(bar_w);
-            // Stretch bars to fill available width when few data points
-            let bar_width = if bar_count == 0 { 1 } else { (bar_w / bar_count).max(1) };
+            let bar_width = bar_w.checked_div(bar_count).unwrap_or(1).max(1);
 
             for row in (0..bar_h).rev() {
                 let threshold = (row * max_count) / bar_h;
@@ -79,7 +71,6 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
                 }
                 left_lines.push(Line::from(spans));
             }
-            // X labels: one per bar, each bar_width chars wide
             let nth = (bar_count / 5).max(1);
             let mut x_spans: Vec<Span> = vec![Span::raw("       ")];
             for j in 0..bar_count {
@@ -99,7 +90,6 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
 
     f.render_widget(Paragraph::new(left_lines), chart_area);
 
-    // RIGHT: language breakdown + top repos
     let mut right_lines: Vec<Line> = vec![];
 
     right_lines.push(Line::from(Span::styled("  Languages", yel)));
@@ -153,9 +143,6 @@ pub fn render_stats_global(f: &mut Frame, state: &HubState, area: Rect) {
     f.render_widget(Paragraph::new(right_lines), cols[1]);
 }
 
-/// Your author-filtered contribution graph: streak + totals, a GitHub-style
-/// 52-week heatmap, and an hour-of-day histogram. Author-scoped (only commits
-/// by your configured identities), unlike the all-commits chart beside it.
 fn render_own_contributions(f: &mut Frame, state: &HubState, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let yel = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
@@ -186,7 +173,6 @@ fn render_own_contributions(f: &mut Frame, state: &HubState, area: Rect) {
     ]));
     lines.push(Line::from(""));
 
-    // 52-week heatmap: 7 rows (Mon..Sun) × one column per week, shaded by count.
     let hm = &gs.own_heatmap;
     let weeks = hm.len().div_ceil(7);
     let day_lbl = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
@@ -207,7 +193,6 @@ fn render_own_contributions(f: &mut Frame, state: &HubState, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    // Hour-of-day histogram as a 24-cell sparkline.
     let hours = &gs.own_hours;
     let hmax = hours.iter().copied().max().unwrap_or(1).max(1) as usize;
     let ramp = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -248,7 +233,6 @@ pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {
         return;
     }
 
-    // Keep the cursor in range and scroll a window around it.
     let max_rows = (inner.height.saturating_sub(1) as usize).max(1);
     let cursor   = state.activity_cursor.min(filtered.len() - 1);
     let offset   = if cursor >= max_rows { cursor - max_rows + 1 } else { 0 };
@@ -272,12 +256,9 @@ pub fn render_activity_global(f: &mut Frame, state: &HubState, area: Rect) {
             crate::activity::ActivityKind::Issue    => Color::LightYellow,
             crate::activity::ActivityKind::License  => Color::Blue,
         };
-        // Precise local timestamp + relative age, instead of age alone.
         let when = chrono::DateTime::from_timestamp(e.ts, 0)
             .map(|d| d.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
             .unwrap_or_else(|| "—".into());
-        // Colour the repo by its project, matching the Repos table; the ›
-        // marks it as a jump target.
         let repo_ri  = state.repos.iter().position(|r| r.name == e.repo);
         let repo_col = repo_ri.and_then(|ri| state.repo_proj_color(ri)).unwrap_or(Color::White);
         let repo_txt = format!("{}{}", if repo_ri.is_some() { "› " } else { "  " },

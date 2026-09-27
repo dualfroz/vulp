@@ -1,8 +1,3 @@
-//! Workspace scanning and per-repo summary computation: walks the workspace
-//! root for git repos, computes each one's branch/ahead-behind/dirty/license/
-//! language state, and streams results to the hub as they're found rather
-//! than waiting for the whole workspace to finish scanning.
-
 pub mod detail;
 
 use crate::config::AppConfig;
@@ -13,8 +8,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-/// Everything the hub's Repos table and topbar need for one repo, computed
-/// once per scan.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RepoSummary {
     pub name:            String,
@@ -28,14 +21,8 @@ pub struct RepoSummary {
     pub last_commit_ts:  i64,
     pub last_tag:        Option<String>,
     pub visibility:      Option<String>,
-    /// Number of local branches. Surfaced in the Repos table as `+N` next to
-    /// the active branch so a repo that keeps several branches (e.g. one theme
-    /// per branch) shows its branch count at a glance, not just the checkout.
     pub branch_count:    usize,
-    pub owner:           Option<String>,  // parsed from git remote URL
-    /// The provider-side repo name parsed from the git remote URL — not
-    /// necessarily the local folder name (see `parse_repo_name_from_url`).
-    /// Provider-API slugs must use this, never `path.file_name()`.
+    pub owner:           Option<String>,
     pub remote_repo_name: Option<String>,
     pub has_license:     bool,
     pub lang:            Option<String>,
@@ -43,23 +30,12 @@ pub struct RepoSummary {
     pub stars:           Option<u32>,
     pub open_issues:     Option<u32>,
     pub open_prs:        Option<u32>,
-    /// Stash entries, counted from `.git/logs/refs/stash` (cheap file read,
-    /// no subprocess — scan-path safe).
     pub stash_count:     usize,
-    /// Latest CI run on the current branch: "success"|"failure"|"running"
-    /// (from the meta cache / API refresh; None = unknown).
     pub ci_status:       Option<String>,
-    /// Open Dependabot alerts (from the meta cache / API refresh).
     pub dependabot_open: Option<u32>,
-    /// Deploy-drift state string (`deploy::DeployState::as_str`), from the
-    /// meta cache / `[R]` refresh; None = not deployed anywhere the mirror
-    /// convention can see, or the feature isn't configured.
     pub deploy_status: Option<String>,
 }
 
-/// One commit's display fields for a recent-commits list.
-/// Fields currently populated but unread — kept as the seed-data model for
-/// the detail view (see roadmap: per-commit actions).
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CommitLine {
@@ -69,8 +45,6 @@ pub struct CommitLine {
     pub author: String,
 }
 
-/// Richer per-repo detail beyond `RepoSummary`, used as the seed data for
-/// opening the repo detail view.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RepoDetail {
@@ -82,79 +56,49 @@ pub struct RepoDetail {
     #[allow(dead_code)] pub meta_stars:  Option<u32>,
 }
 
-// ── owner parsing ─────────────────────────────────────────────────────────────
-
-/// Extracts the `owner` segment from an HTTPS or SSH git remote URL.
-fn parse_owner_from_url(url: &str) -> Option<String> {
-    // https://github.com/owner/repo[.git]
-    if url.starts_with("http") {
-        let parts: Vec<&str> = url.trim_end_matches('/').trim_end_matches(".git").split('/').collect();
-        let n = parts.len();
-        if n >= 2 { return Some(parts[n - 2].to_string()); }
-    }
-    // git@github.com:owner/repo.git
-    if let Some(colon) = url.rfind(':') {
-        let after = url[colon + 1..].trim_start_matches('/');
-        if let Some(slash) = after.find('/') {
-            return Some(after[..slash].to_string());
+fn remote_path_segments(url: &str) -> Option<Vec<&str>> {
+    let path = match url.split_once("://") {
+        Some((_, rest)) => &rest[rest.find('/')?..],
+        None => {
+            let (host, path) = url.split_once(':')?;
+            if host.contains('/') { return None; }
+            path
         }
-    }
-    None
+    };
+    let path = path.trim_matches('/').trim_end_matches(".git");
+    Some(path.split('/').filter(|s| !s.is_empty()).collect())
 }
 
-/// Extracts the `repo` segment from an HTTPS or SSH git remote URL — the
-/// name the provider actually knows the repo by, which is not necessarily
-/// the local folder's name (a repo can be cloned into, or renamed to, any
-/// directory name locally; `vulp`'s own local folder is "vulp" but its
-/// GitHub repo is "fxg"). Callers building a provider-API slug must prefer
-/// this over `path.file_name()`.
+fn parse_owner_from_url(url: &str) -> Option<String> {
+    let segments = remote_path_segments(url)?;
+    let n = segments.len();
+    (n >= 2).then(|| segments[n - 2].to_string())
+}
+
 fn parse_repo_name_from_url(url: &str) -> Option<String> {
-    if url.starts_with("http") {
-        let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
-        return trimmed.rsplit('/').next().map(|s| s.to_string());
-    }
-    // git@github.com:owner/repo.git
-    if let Some(colon) = url.rfind(':') {
-        let after = url[colon + 1..].trim_start_matches('/').trim_end_matches(".git");
-        return after.rsplit('/').next().map(|s| s.to_string());
-    }
-    None
+    remote_path_segments(url)?.last().map(|s| s.to_string())
 }
 
-/// Parses the owner from `repo`'s `origin` remote, if it has one.
 fn extract_owner(repo: &Repository) -> Option<String> {
     let remote = repo.find_remote("origin").ok()?;
     parse_owner_from_url(remote.url()?)
 }
 
-/// Parses the provider-side repo name from `repo`'s `origin` remote, if it
-/// has one — see `parse_repo_name_from_url` for why this can differ from
-/// the local folder name.
 fn extract_remote_repo_name(repo: &Repository) -> Option<String> {
     let remote = repo.find_remote("origin").ok()?;
     parse_repo_name_from_url(remote.url()?)
 }
 
-// ── license + language detection ──────────────────────────────────────────────
-
-/// Whether `path` has a recognizable license file at its root.
 pub fn detect_license(path: &Path) -> bool {
     ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "COPYING.md"]
         .iter().any(|f| path.join(f).exists())
 }
 
-// Categories treated as media/binary assets — only displayed when they dominate (>80% of files).
 const ASSET_CATEGORIES: &[&str] = &[
     "Images", "Textures", "Audio", "Video", "3D", "Fonts",
     "PDF", "Docs", "Spreadsheets", "Slides", "eBook",
 ];
 
-/// Detects the repo's dominant language(s) by file-extension counts,
-/// returning up to 4 as a "`Lang NN%`" display string. Asset extensions
-/// (images, audio, fonts, etc.) are excluded from the percentage base unless
-/// they make up over 80% of the repo, in which case they're shown instead —
-/// otherwise a repo that's mostly a code project with some bundled assets
-/// would have its real language diluted by file count alone.
 pub fn detect_language(path: &Path) -> Option<String> {
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     let mut total = 0usize;
@@ -167,7 +111,6 @@ pub fn detect_language(path: &Path) -> Option<String> {
         .sum();
     let assets_dominate = asset_total * 100 / total > 80;
 
-    // When assets don't dominate, exclude them from both the display and the percentage base.
     let base = if assets_dominate { total } else { total - asset_total };
     if base == 0 { return None; }
 
@@ -177,17 +120,15 @@ pub fn detect_language(path: &Path) -> Option<String> {
         .collect();
 
     if langs.is_empty() { return None; }
-    langs.sort_by(|a, b| b.1.cmp(&a.1));
+    langs.sort_by_key(|(_, files)| std::cmp::Reverse(*files));
     Some(langs.iter().take(4)
         .map(|(lang, c)| format!("{} {}%", lang, c * 100 / base))
         .collect::<Vec<_>>()
         .join("  "))
 }
 
-/// Maps a file extension to a display language/category name.
 fn ext_to_lang(ext: &str) -> Option<&'static str> {
     Some(match ext {
-        // ── code ──────────────────────────────────────────────────────────────
         "rs"                                          => "Rust",
         "go"                                          => "Go",
         "py" | "pyw"                                  => "Python",
@@ -219,7 +160,6 @@ fn ext_to_lang(ext: &str) -> Option<&'static str> {
         "tf" | "tfvars"                               => "Terraform",
         "sql"                                         => "SQL",
 
-        // ── docs & text ───────────────────────────────────────────────────────
         "md" | "mdx" | "rst"                          => "Markdown",
         "txt" | "rtf" | "log"                         => "Text",
         "pdf"                                         => "PDF",
@@ -228,37 +168,30 @@ fn ext_to_lang(ext: &str) -> Option<&'static str> {
         "pptx" | "ppt" | "odp" | "keynote"           => "Slides",
         "epub"                                        => "eBook",
 
-        // ── images ────────────────────────────────────────────────────────────
         "png" | "jpg" | "jpeg" | "gif" | "webp"
         | "svg" | "ico" | "bmp" | "tiff" | "tif"
         | "tga" | "psd" | "xcf" | "raw" | "dng"
         | "cr2" | "nef" | "heic" | "heif" | "avif"
         | "apng" | "jxl"                              => "Images",
 
-        // ── textures (GPU / game engine specific) ─────────────────────────────
         "dds" | "ktx" | "ktx2" | "exr" | "hdr"
         | "basis" | "bc7" | "astc"                    => "Textures",
 
-        // ── audio ─────────────────────────────────────────────────────────────
         "mp3" | "wav" | "ogg" | "flac" | "aac"
         | "m4a" | "wma" | "opus" | "mid" | "midi"
         | "aif" | "aiff" | "caf" | "ra" | "amr"      => "Audio",
 
-        // ── video ─────────────────────────────────────────────────────────────
         "mp4" | "mkv" | "avi" | "mov" | "webm"
         | "m4v" | "wmv" | "flv" | "ogv" | "mpg"
         | "mpeg" | "m2ts" | "mts" | "vob" | "rm"     => "Video",
 
-        // ── 3d models ─────────────────────────────────────────────────────────
         "obj" | "fbx" | "blend" | "gltf" | "glb"
         | "stl" | "dae" | "3ds" | "ply" | "abc"
         | "usd" | "usda" | "usdc" | "usdz"
         | "max" | "ma" | "mb" | "c4d" | "lwo"        => "3D",
 
-        // ── fonts ─────────────────────────────────────────────────────────────
         "ttf" | "otf" | "woff" | "woff2" | "eot"     => "Fonts",
 
-        // ── data / ml ─────────────────────────────────────────────────────────
         "parquet" | "arrow" | "hdf5" | "h5"
         | "npy" | "npz" | "pkl" | "mat" | "nc"       => "Data",
 
@@ -266,10 +199,6 @@ fn ext_to_lang(ext: &str) -> Option<&'static str> {
     })
 }
 
-/// Recursively tallies file extensions under `dir` into `counts`, stopping
-/// at `depth` or once `total` hits 5000 files — a repo-wide walk only needs
-/// a representative sample, not an exhaustive count, and the cap keeps huge
-/// repos from making every scan slow.
 fn lang_walk(
     dir: &Path,
     counts: &mut HashMap<&'static str, usize>,
@@ -293,17 +222,11 @@ fn lang_walk(
     }
 }
 
-// ── lazy per-repo extras ───────────────────────────────────────────────────────
-
-/// Number of files tracked in the git index — cheaper than walking the
-/// filesystem since it's served straight from git's own index.
 pub fn count_tracked_files(path: &Path) -> usize {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return 0 };
     repo.index().map(|i| i.len()).unwrap_or(0)
 }
 
-/// The `n` most recent commits as `(age, message)` pairs, for the Overview
-/// tab's recent-activity list.
 pub fn repo_recent_commits(path: &Path, n: usize) -> Vec<(String, String)> {
     let repo = match Repository::open(path) { Ok(r) => r, Err(_) => return vec![] };
     let mut revwalk = match repo.revwalk() { Ok(r) => r, Err(_) => return vec![] };
@@ -319,14 +242,8 @@ pub fn repo_recent_commits(path: &Path, n: usize) -> Vec<(String, String)> {
         .collect()
 }
 
-// ── git helpers ───────────────────────────────────────────────────────────────
-
-/// Public entry point for `format_age`, for callers outside this module
-/// (detail/project-detail rendering) that need the same "Nm/h/d ago"
-/// formatting without duplicating it.
 pub fn format_age_pub(secs: i64) -> String { format_age(secs) }
 
-/// Formats a Unix timestamp as a short relative-age string.
 fn format_age(secs: i64) -> String {
     let diff = Utc::now().timestamp() - secs;
     match diff {
@@ -337,8 +254,6 @@ fn format_age(secs: i64) -> String {
     }
 }
 
-/// Commits ahead/behind the matching `origin/<branch>`, or `(0, 0)` if
-/// there's no such upstream (a purely local branch, or detached HEAD).
 fn ahead_behind(repo: &Repository, branch: &str) -> (usize, usize) {
     let local = match repo.head().and_then(|h| h.peel_to_commit()) {
         Ok(c)  => c.id(),
@@ -351,9 +266,6 @@ fn ahead_behind(repo: &Repository, branch: &str) -> (usize, usize) {
     }
 }
 
-/// The name of the most recently created annotated or lightweight tag,
-/// determined by the tagged commit's timestamp rather than tag creation
-/// order (which git doesn't expose directly).
 fn latest_tag(repo: &Repository) -> Option<String> {
     let mut best: Option<(i64, String)> = None;
     if let Ok(names) = repo.tag_names(None) {
@@ -372,18 +284,11 @@ fn latest_tag(repo: &Repository) -> Option<String> {
     best.map(|(_, n)| n)
 }
 
-/// Computes a full `RepoSummary` for the repo at `path`. Treats a freshly
-/// `git init`'d repo with zero commits as a valid (empty) result rather than
-/// an error, so brand-new repos still show up in the hub instead of being
-/// silently dropped from scan results.
 pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     let t_total = std::time::Instant::now();
 
     let repo = Repository::open(path)?;
 
-    // A freshly `git init`'d repo has no commits yet, so `repo.head()` returns
-    // an UnbornBranch error. Treat that as a valid (empty) repo instead of
-    // silently dropping it from the scan results.
     let (branch, msg, age, ts) = match repo.head() {
         Ok(head) => {
             let branch = head.shorthand().unwrap_or("HEAD").to_string();
@@ -444,13 +349,10 @@ pub fn repo_summary(path: &Path) -> Result<RepoSummary> {
     })
 }
 
-/// Computes a `RepoDetail` (summary plus modified-files and recent-commits
-/// snapshots) for the repo at `path`.
 pub fn repo_detail(path: &Path) -> Result<RepoDetail> {
     let repo = Repository::open(path)?;
     let summary = repo_summary(path)?;
 
-    // Modified files
     let mut sopts = StatusOptions::new();
     sopts.include_untracked(true);
     let statuses = repo.statuses(Some(&mut sopts))?;
@@ -462,7 +364,6 @@ pub fn repo_detail(path: &Path) -> Result<RepoDetail> {
         (ch, e.path().unwrap_or("").to_string())
     }).collect();
 
-    // Recent commits
     let mut revwalk = repo.revwalk()?;
     revwalk.push_head()?;
     let recent_commits: Vec<CommitLine> = revwalk.take(5).filter_map(|id| {
@@ -478,8 +379,6 @@ pub fn repo_detail(path: &Path) -> Result<RepoDetail> {
     Ok(RepoDetail { summary, modified_files, recent_commits, meta_issues: None, meta_prs: None, meta_stars: None })
 }
 
-/// Background streaming scan — sends repos to the TUI as they are found.
-/// The channel closes when the scan finishes; the receiver side triggers a final sort.
 pub fn scan_workspace_stream(root: PathBuf) -> mpsc::Receiver<RepoSummary> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -489,9 +388,6 @@ pub fn scan_workspace_stream(root: PathBuf) -> mpsc::Receiver<RepoSummary> {
     rx
 }
 
-/// Recursive worker for `scan_workspace_stream`: walks `dir`, sending each
-/// found repo's summary to `tx` immediately rather than collecting into a
-/// `Vec` first, so the hub can start showing results before the scan finishes.
 fn scan_recursive_tx(
     dir: &Path, root: &Path,
     tx: &mpsc::Sender<RepoSummary>,
@@ -522,10 +418,6 @@ fn scan_recursive_tx(
     }
 }
 
-/// Synchronous (non-streaming) full workspace scan, sorted with
-/// dirty/behind repos first and otherwise by most-recently-committed.
-/// `_groups` is currently unused — see `config::AppConfig::workspace_groups`'s
-/// doc comment for the intended (not yet wired up) grouping behavior.
 pub fn scan_workspace(root: &Path, _groups: &[String]) -> Result<Vec<RepoSummary>> {
     crate::debug::log(format!("scan_workspace: {}", root.display()));
     let mut repos = Vec::new();
@@ -533,14 +425,12 @@ pub fn scan_workspace(root: &Path, _groups: &[String]) -> Result<Vec<RepoSummary
     scan_recursive(root, root, &mut repos, 5);
     crate::debug::log(format!("scan done: {} repos", repos.len()));
 
-    // Apply labels: if a repo has an assigned display name, use it
     for r in &mut repos {
         if let Some(label) = labels.get(&r.path) {
             r.name = label.clone();
         }
     }
 
-    // Sort: active repos (dirty or behind) first, then by last commit timestamp desc
     repos.sort_by(|a, b| {
         let a_active = a.is_dirty || a.behind > 0;
         let b_active = b.is_dirty || b.behind > 0;
@@ -555,7 +445,6 @@ const SKIP_DIRS: &[&str] = &[
     ".npm", ".cargo", "__pycache__", ".venv", "venv", "dist", "build",
 ];
 
-/// Recursive worker for `scan_workspace`, collecting results into `repos`.
 fn scan_recursive(dir: &Path, root: &Path, repos: &mut Vec<RepoSummary>, depth: u8) {
     if depth == 0 { return; }
     let entries = match std::fs::read_dir(dir) {
@@ -570,7 +459,6 @@ fn scan_recursive(dir: &Path, root: &Path, repos: &mut Vec<RepoSummary>, depth: 
 
         if path.join(".git").exists() {
             if let Ok(mut s) = repo_summary(&path) {
-                // Show relative path from workspace_root so user knows context
                 if let Ok(rel) = path.strip_prefix(root) {
                     s.name = rel.to_string_lossy().to_string();
                 }
@@ -582,9 +470,195 @@ fn scan_recursive(dir: &Path, root: &Path, repos: &mut Vec<RepoSummary>, depth: 
     }
 }
 
-/// Entry point for the bare `vulp` command (no subcommand): starts a
-/// streaming workspace scan and opens the hub TUI against it.
 pub async fn run(cfg: &AppConfig) -> Result<()> {
     let rx = scan_workspace_stream(cfg.workspace_root.clone());
     crate::hub::run_overview_tui(vec![], Some(rx), cfg).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::testgit::{commit_at, commit_file, git, init_repo};
+
+    fn touch(dir: &Path, rel: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn owner_and_repo_name_from_remote_urls() {
+        let cases = [
+            ("https://github.com/octo/hello.git", Some("octo"), Some("hello")),
+            ("https://github.com/octo/hello/", Some("octo"), Some("hello")),
+            ("https://gitlab.example.com/group/sub/proj", Some("sub"), Some("proj")),
+            ("git@github.com:octo/hello.git", Some("octo"), Some("hello")),
+            ("git@gitea.example.com:/team/tool", Some("team"), Some("tool")),
+            ("https://git.example.com:8443/octo/hello.git", Some("octo"), Some("hello")),
+            ("https://user@git.example.com/octo/hello", Some("octo"), Some("hello")),
+            ("github.com:octo/hello.git", Some("octo"), Some("hello")),
+            ("git@gitlab.example.com:group/sub/proj.git", Some("sub"), Some("proj")),
+            ("ssh://git@github.com/octo/hello.git", Some("octo"), Some("hello")),
+            ("ssh://git@git.example.com:2222/octo/hello.git", Some("octo"), Some("hello")),
+            ("ssh://git.example.com/octo/hello", Some("octo"), Some("hello")),
+            ("ssh://git.example.com:22/octo/hello.git/", Some("octo"), Some("hello")),
+            ("ssh://git@gitlab.example.com/group/sub/proj.git", Some("sub"), Some("proj")),
+            ("ssh://git@git.example.com:2222/hello.git", None, Some("hello")),
+        ];
+        for (url, owner, name) in cases {
+            assert_eq!(parse_owner_from_url(url).as_deref(), owner, "{url}");
+            assert_eq!(parse_repo_name_from_url(url).as_deref(), name, "{url}");
+        }
+        assert_eq!(parse_owner_from_url("/srv/git/hello.git"), None);
+        assert_eq!(parse_repo_name_from_url("/srv/git/hello.git"), None);
+    }
+
+    #[test]
+    fn license_files_are_recognized_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!detect_license(dir.path()));
+        touch(dir.path(), "docs/LICENSE");
+        assert!(!detect_license(dir.path()));
+        for name in ["LICENSE", "LICENSE.md", "COPYING", "LICENSE-APACHE"] {
+            let d = tempfile::tempdir().unwrap();
+            touch(d.path(), name);
+            assert!(detect_license(d.path()), "{name}");
+        }
+    }
+
+    #[test]
+    fn language_is_ranked_by_file_count() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(detect_language(dir.path()), None);
+        for f in ["src/a.rs", "src/b.rs", "README.md", "node_modules/x/y.js", "target/z.ts", "Makefile"] {
+            touch(dir.path(), f);
+        }
+        assert_eq!(detect_language(dir.path()).as_deref(), Some("Rust 66%  Markdown 33%"));
+    }
+
+    #[test]
+    fn assets_only_show_when_they_dominate() {
+        let mixed = tempfile::tempdir().unwrap();
+        for f in ["a.png", "b.png", "c.jpg", "a.rs", "b.rs", "c.rs", "d.rs", "README.md"] {
+            touch(mixed.path(), f);
+        }
+        assert_eq!(detect_language(mixed.path()).as_deref(), Some("Rust 80%  Markdown 20%"));
+
+        let art = tempfile::tempdir().unwrap();
+        for i in 0..9 { touch(art.path(), &format!("img{i}.png")); }
+        touch(art.path(), "tool.py");
+        assert_eq!(detect_language(art.path()).as_deref(), Some("Images 90%  Python 10%"));
+    }
+
+    #[test]
+    fn minor_languages_below_five_percent_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..40 { touch(dir.path(), &format!("m{i}.go")); }
+        touch(dir.path(), "script.sh");
+        assert_eq!(detect_language(dir.path()).as_deref(), Some("Go 97%"));
+    }
+
+    #[test]
+    fn extension_mapping() {
+        assert_eq!(ext_to_lang("tsx"), Some("TypeScript"));
+        assert_eq!(ext_to_lang("hpp"), Some("C++"));
+        assert_eq!(ext_to_lang("woff2"), Some("Fonts"));
+        assert_eq!(ext_to_lang("lock"), None);
+    }
+
+    #[test]
+    fn relative_age_formatting() {
+        let now = Utc::now().timestamp();
+        assert_eq!(format_age(now - 125), "2m ago");
+        assert_eq!(format_age(now - 3 * 3600 - 5), "3h ago");
+        assert_eq!(format_age(now - 86400 - 60), "yesterday");
+        assert_eq!(format_age(now - 5 * 86400 - 60), "5d ago");
+    }
+
+    #[test]
+    fn summary_of_an_empty_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("fresh"));
+        let s = repo_summary(&repo).unwrap();
+        assert_eq!(s.name, "fresh");
+        assert_eq!(s.branch, "main");
+        assert_eq!(s.last_commit_msg, "(no commits yet)");
+        assert_eq!(s.last_commit_ts, 0);
+        assert_eq!((s.ahead, s.behind), (0, 0));
+        assert!(!s.is_dirty);
+        assert_eq!(s.last_tag, None);
+    }
+
+    #[test]
+    fn summary_reports_git_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("app"));
+        let first = commit_at(&repo, "main.rs", "fn main() {}", "first", 1_700_000_000);
+        git(&repo, &["tag", "v0.1.0"]);
+        commit_at(&repo, "lib.rs", "pub fn x() {}", "second commit", 1_700_100_000);
+        git(&repo, &["tag", "-a", "v0.2.0", "-m", "release"]);
+        git(&repo, &["remote", "add", "origin", "git@github.com:octo/app-remote.git"]);
+        git(&repo, &["update-ref", "refs/remotes/origin/main", &first]);
+        git(&repo, &["branch", "feature"]);
+
+        let s = repo_summary(&repo).unwrap();
+        assert_eq!(s.branch, "main");
+        assert_eq!(s.last_commit_msg, "second commit");
+        assert_eq!(s.last_commit_ts, 1_700_100_000);
+        assert_eq!(s.last_tag.as_deref(), Some("v0.2.0"));
+        assert_eq!((s.ahead, s.behind), (1, 0));
+        assert_eq!(s.branch_count, 2);
+        assert_eq!(s.owner.as_deref(), Some("octo"));
+        assert_eq!(s.remote_repo_name.as_deref(), Some("app-remote"));
+        assert_eq!(s.lang.as_deref(), Some("Rust 100%"));
+        assert!(!s.is_dirty);
+        assert!(!s.has_license);
+        assert_eq!(s.stash_count, 0);
+
+        std::fs::write(repo.join("lib.rs"), "pub fn y() {}").unwrap();
+        git(&repo, &["stash", "-q"]);
+        std::fs::write(repo.join("new.txt"), "untracked").unwrap();
+        touch(&repo, "LICENSE");
+        let s = repo_summary(&repo).unwrap();
+        assert!(s.is_dirty);
+        assert!(s.has_license);
+        assert_eq!(s.stash_count, 1);
+
+        git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&repo, &["reset", "-q", "--hard", &first]);
+        let s = repo_summary(&repo).unwrap();
+        assert_eq!((s.ahead, s.behind), (0, 1));
+    }
+
+    #[test]
+    fn workspace_scan_finds_nested_repos_and_sorts_active_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let old = init_repo(&root.join("old"));
+        commit_at(&old, "a.txt", "a", "old", 1_600_000_000);
+        let recent = init_repo(&root.join("recent"));
+        commit_at(&recent, "a.txt", "a", "recent", 1_700_000_000);
+        let nested = init_repo(&root.join("clients/acme/site"));
+        commit_at(&nested, "a.txt", "a", "nested", 1_650_000_000);
+        std::fs::write(nested.join("wip.txt"), "dirty").unwrap();
+        let hidden = init_repo(&root.join("node_modules/dep"));
+        commit_file(&hidden, "a.txt", "a", "dep");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+
+        let names: Vec<String> = scan_workspace(root, &[]).unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["clients/acme/site", "recent", "old"]);
+    }
+
+    #[test]
+    fn recent_commits_are_newest_first_and_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("r"));
+        for i in 0..4 {
+            commit_at(&repo, "f.txt", &i.to_string(), &format!("commit {i}"), 1_700_000_000 + i * 60);
+        }
+        let msgs: Vec<String> = repo_recent_commits(&repo, 3).into_iter().map(|(_, m)| m).collect();
+        assert_eq!(msgs, ["commit 3", "commit 2", "commit 1"]);
+        assert!(repo_recent_commits(dir.path(), 3).is_empty());
+        assert_eq!(count_tracked_files(&repo), 1);
+    }
 }

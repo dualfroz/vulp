@@ -1,9 +1,3 @@
-//! Hub actions that fall outside the TUI's draw/key-handling split: the
-//! blocking sync flow (which drops out of the TUI to plain stdout while it
-//! runs), API refresh against configured provider accounts, the TODO/FIXME
-//! scanner, clipboard/URL re-exports, and the `~/.vulp/*.toml` persistence
-//! for bookmarks, pins, and repo-creation templates.
-
 use anyhow::Result;
 use crate::status::RepoSummary;
 use crate::todos::{self, TodoSource};
@@ -11,26 +5,16 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use super::state::HubState;
 
-// ── PR relevance ──────────────────────────────────────────────────────────────
-
-/// Account logins to treat as "you" when deciding PR authorship.
 pub fn account_logins(accounts: &[crate::auth::Account]) -> Vec<String> {
     accounts.iter().map(|a| a.username.clone()).filter(|u| !u.is_empty()).collect()
 }
 
-/// Whether a PR is worth surfacing in the hub. Shown only when you authored
-/// it but can't merge it yourself (your contribution to a repo you don't
-/// control) or someone else authored it and you can (it's awaiting your
-/// review). Your own PR in a repo you can merge in, and strangers' PRs you
-/// can't act on, are both noise and filtered out. `logins` are your account
-/// usernames; an empty `logins` shows everything (identity unknown).
 pub fn pr_is_relevant(pr: &crate::providers::PrDetail, logins: &[String]) -> bool {
     if logins.is_empty() { return true; }
     let mine = logins.iter().any(|u| u.eq_ignore_ascii_case(&pr.author));
     mine != pr.viewer_can_merge
 }
 
-/// Filters a cached PR list down to the relevant ones (see `pr_is_relevant`).
 pub fn relevant_prs(
     prs: impl IntoIterator<Item = crate::providers::PrDetail>,
     accounts: &[crate::auth::Account],
@@ -39,12 +23,6 @@ pub fn relevant_prs(
     prs.into_iter().filter(|p| pr_is_relevant(p, &logins)).collect()
 }
 
-// ── sync flow ─────────────────────────────────────────────────────────────────
-
-/// Runs `action` ("pull", "commit_push", or anything else meaning "push")
-/// against `targets` (indices into `repos`), printing progress straight to
-/// stdout — the caller suspends the TUI for the duration so this output is
-/// visible, then waits for Enter before restoring the screen.
 pub async fn run_sync_flow(repos: &[RepoSummary], targets: &[usize], action: &str, commit_msg: &str) -> Result<()> {
     let sel: Vec<&RepoSummary> = targets.iter().filter_map(|&i| repos.get(i)).collect();
     if sel.is_empty() { return Ok(()); }
@@ -91,9 +69,6 @@ pub async fn run_sync_flow(repos: &[RepoSummary], targets: &[usize], action: &st
 
 pub use crate::util::git::git_run;
 
-/// Re-scans the workspace from disk, reapplies bookmark state, and rebuilds
-/// the display rows — used after operations that change repo state on disk
-/// outside of `HubState` (e.g. after a sync or a new repo creation).
 pub fn refresh_repos(state: &mut HubState) {
     if let Ok(fresh) = crate::status::scan_workspace(&state.workspace_root, &[]) {
         state.repos = fresh;
@@ -101,28 +76,17 @@ pub fn refresh_repos(state: &mut HubState) {
             r.bookmarked = state.bookmarks.contains(&r.path);
         }
         state.focused_cache.clear();
-        // `selected` holds indices into the old repo order — after a rescan
-        // they'd silently point at different repos (batch sync/release would
-        // hit wrong targets), so drop the selection entirely.
         state.selected.clear();
         state.rebuild_display();
     }
-    // Actions that trigger a rescan (sync, release, repo creation) also write
-    // to the activity log — reload it so the Overview vulp-log tile stays live.
     state.vulp_log = {
         let mut log = crate::activity::load_logged();
-        log.sort_by(|a, b| b.ts.cmp(&a.ts));
+        log.sort_by_key(|e| std::cmp::Reverse(e.ts));
         log.truncate(50);
         log
     };
 }
 
-// ── TODO scanner ──────────────────────────────────────────────────────────────
-
-/// Scans every repo for `TODO`/`FIXME`/`HACK` markers (via
-/// [`crate::legacy::refactor`]) and imports each unseen one as a new todo,
-/// skipping any whose generated title already matches an existing todo so
-/// re-running the scan doesn't create duplicates. Returns the count added.
 pub fn scan_todos_from_repos(state: &mut HubState) -> usize {
     let mut added = 0usize;
     let existing_titles: HashSet<String> =
@@ -154,11 +118,8 @@ pub fn scan_todos_from_repos(state: &mut HubState) -> usize {
     added
 }
 
-// ── clipboard ─────────────────────────────────────────────────────────────────
-
 pub use crate::util::clipboard::copy_to_clipboard;
 
-/// Reads the `origin` remote URL straight from the repo's git config.
 pub fn get_remote_url(path: &PathBuf) -> Option<String> {
     let repo   = git2::Repository::open(path).ok()?;
     let remote = repo.find_remote("origin").ok()?;
@@ -167,14 +128,10 @@ pub fn get_remote_url(path: &PathBuf) -> Option<String> {
 
 pub use crate::util::url::to_web_url;
 
-// ── bookmarks persistence ─────────────────────────────────────────────────────
-
 fn bookmarks_path() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".vulp").join("bookmarks.toml")
 }
 
-/// Loads bookmarked repo paths from `~/.vulp/bookmarks.toml`, or an empty
-/// set if the file doesn't exist or fails to parse.
 pub fn load_bookmarks() -> HashSet<PathBuf> {
     let p = bookmarks_path();
     if !p.exists() { return HashSet::new(); }
@@ -185,7 +142,6 @@ pub fn load_bookmarks() -> HashSet<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Writes `bk` to `~/.vulp/bookmarks.toml`, creating the directory if needed.
 pub fn save_bookmarks(bk: &HashSet<PathBuf>) {
     #[derive(serde::Serialize)]
     struct Bk { paths: Vec<String> }
@@ -195,22 +151,16 @@ pub fn save_bookmarks(bk: &HashSet<PathBuf>) {
     if let Ok(s) = toml::to_string_pretty(&data) { let _ = std::fs::write(p, s); }
 }
 
-// ── templates persistence ─────────────────────────────────────────────────────
-
 fn templates_path() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".vulp").join("templates.toml")
 }
 
-/// On-disk shape of `~/.vulp/templates.toml`.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct TemplatesFile {
     #[serde(default)]
     templates: Vec<super::state::RepoTemplate>,
 }
 
-/// Loads repo-creation templates from `~/.vulp/templates.toml`. On first run
-/// (file missing or empty), seeds and saves the built-in stack templates
-/// from [`default_templates`] so the picker is never empty.
 pub fn load_templates() -> Vec<super::state::RepoTemplate> {
     let p = templates_path();
     if p.exists() {
@@ -219,14 +169,11 @@ pub fn load_templates() -> Vec<super::state::RepoTemplate> {
             .unwrap_or_default();
         if !loaded.is_empty() { return loaded; }
     }
-    // First run — seed built-in stacks
     let defaults = default_templates();
     save_templates(&defaults);
     defaults
 }
 
-/// Built-in repo-creation templates (Rust, Node.js, React, Python, Go,
-/// Laravel) used to seed `templates.toml` on first run.
 fn default_templates() -> Vec<super::state::RepoTemplate> {
     use super::state::RepoTemplate;
     vec![
@@ -296,8 +243,6 @@ fn default_templates() -> Vec<super::state::RepoTemplate> {
     ]
 }
 
-/// Writes `templates` to `~/.vulp/templates.toml`, creating the directory if
-/// needed.
 pub fn save_templates(templates: &[super::state::RepoTemplate]) {
     let p = templates_path();
     if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
@@ -305,14 +250,10 @@ pub fn save_templates(templates: &[super::state::RepoTemplate]) {
     if let Ok(s) = toml::to_string_pretty(&file) { let _ = std::fs::write(p, s); }
 }
 
-// ── pins persistence ──────────────────────────────────────────────────────────
-
 fn pins_path() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".vulp").join("pins.toml")
 }
 
-/// Loads pinned repo paths from `~/.vulp/pins.toml`, or an empty set if the
-/// file doesn't exist or fails to parse.
 pub fn load_pins() -> HashSet<PathBuf> {
     let p = pins_path();
     if !p.exists() { return HashSet::new(); }
@@ -323,7 +264,6 @@ pub fn load_pins() -> HashSet<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Writes `pins` to `~/.vulp/pins.toml`, creating the directory if needed.
 pub fn save_pins(pins: &HashSet<PathBuf>) {
     #[derive(serde::Serialize)]
     struct Pins { paths: Vec<String> }

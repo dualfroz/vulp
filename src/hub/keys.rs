@@ -1,9 +1,3 @@
-//! The hub's main event loop: one terminal frame, one input event, dispatched
-//! to whichever input mode is active (modal open, confirm prompt, filter
-//! typing, or the plain global keymap in `keys_dispatch`), plus the two
-//! lazy-loaders that kick off a background fetch the first time their tab
-//! is opened.
-
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, MouseEventKind};
 use super::modals::{handle_modal_key, process_modal_confirm};
@@ -13,8 +7,6 @@ use super::{keys_dispatch, keys_poll};
 
 pub fn maybe_load_global_stats(state: &mut HubState) {
     if !matches!(state.tab, Tab::Stats | Tab::Overview) { return; }
-    // Wait for the workspace scan to finish — computing stats from a
-    // partially-streamed repo list bakes in an empty/incomplete snapshot.
     if state.scan_rx.is_some() { return; }
     if state.global_stats.is_some() || state.global_stats_rx.is_some() { return; }
 
@@ -31,9 +23,6 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
     std::thread::spawn(move || {
         use super::state::GlobalStats;
 
-        // Author-filtered "your contributions" — one git scan across the
-        // workspace (cheap since the `-E` fix), independent of the period
-        // selector: streak/heatmap/hours are your whole activity graph.
         let matcher = crate::stats::OwnEmailMatcher::resolve(&cfg, &accounts);
         let own_commits: Vec<crate::stats::OwnCommit> = repos_snapshot.iter()
             .flat_map(|(_, path, _, _, _)| crate::stats::scan_repo_own_commits(path, &matcher))
@@ -74,21 +63,19 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
 
         let mut activity: Vec<(String, usize)> = all_dates.into_iter().collect();
         activity.sort_by(|a, b| a.0.cmp(&b.0));
-        top_repos.sort_by(|a, b| b.1.cmp(&a.1));
+        top_repos.sort_by_key(|(_, commits)| std::cmp::Reverse(*commits));
         let repo_commits = top_repos.clone();
         top_repos.truncate(5);
 
         let mut lang_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (_, _, lang, _, _) in &repos_snapshot {
-            // Repo lang strings can carry a percentage suffix ("TypeScript 92%") —
-            // aggregate on the bare language name so they count as one language.
             if let Some(l) = lang {
                 let name = l.split_whitespace().next().unwrap_or(l).to_string();
                 *lang_map.entry(name).or_default() += 1;
             }
         }
         let mut lang_dist: Vec<(String, usize)> = lang_map.into_iter().collect();
-        lang_dist.sort_by(|a, b| b.1.cmp(&a.1));
+        lang_dist.sort_by_key(|(_, repos)| std::cmp::Reverse(*repos));
         lang_dist.truncate(8);
 
         let _ = tx.send(GlobalStats {
@@ -103,11 +90,6 @@ pub fn maybe_load_global_stats(state: &mut HubState) {
     state.status_msg = Some("Computing global stats...".into());
 }
 
-/// Builds the Activity tab's feed: git commits + tags (ground truth, sourced
-/// straight from each repo's history, regardless of how the activity
-/// happened) merged with PR/issue timestamps already in memory, merged with
-/// the locally-logged push/pull/release/new-repo/todo events that only vulp
-/// itself can see (see `crate::activity`).
 pub fn maybe_load_activity(state: &mut HubState) {
     if state.tab != Tab::Activity { return; }
     if state.activity_feed.is_some() || state.activity_rx.is_some() { return; }
@@ -149,7 +131,7 @@ pub fn maybe_load_activity(state: &mut HubState) {
                 }
             }
         }
-        entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
         entries.truncate(2000);
         let _ = tx.send(entries);
     });
@@ -158,16 +140,6 @@ pub fn maybe_load_activity(state: &mut HubState) {
     state.status_msg = Some("Loading activity...".into());
 }
 
-/// Runs the hub's TUI for one or more frames until something needs to leave
-/// the loop: draws a frame, polls every background channel, reads one input
-/// event, and routes it to whichever input mode is currently active. Modal/
-/// confirm/filter input short-circuit here (they're loop control flow, not
-/// part of the global keymap); everything else goes to `keys_dispatch`.
-///
-/// `existing_term` lets the caller hand back a terminal a sub-view (repo/
-/// project detail) just returned instead of tearing down and setting up a
-/// fresh one — the previous "leave alt screen, blink the real terminal,
-/// re-enter" was visible for a frame every time detail handed control back.
 pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -> Result<(PhaseResult, Option<crate::tui::Tty>)> {
     let mut terminal = match existing_term {
         Some(t) => t,
@@ -176,8 +148,6 @@ pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -
     let result = (|| -> Result<PhaseResult> {
         loop {
             state.poll_incoming();
-            // No-op until the scan completes and only on Overview/Stats —
-            // kicks off the first stats computation once repos are final.
             maybe_load_global_stats(state);
             state.poll_diff();
             state.poll_global_stats();
@@ -254,24 +224,16 @@ pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -
                         state.filter_text.clear();
                         state.rebuild_display();
                     }
-                    // Live navigation while the search box is open: arrows move
-                    // the highlight through the filtered results so you can pick
-                    // one without first "locking" the filter (j/k stay literal
-                    // filter input). Enter opens whatever is highlighted.
                     KeyCode::Down => state.scroll_down(),
                     KeyCode::Up   => state.scroll_up(),
                     KeyCode::Enter => match state.tab {
                         Tab::Repos | Tab::Projects
                             if state.cur_repo_idx().is_some() || state.cur_proj_idx().is_some() =>
                         {
-                            // Open the highlighted repo/project directly, keeping
-                            // the filter text applied for when we come back.
                             state.filtering = false;
                             state.open_detail = true;
                             return Ok(PhaseResult::OpenDetail);
                         }
-                        // Nothing openable under the cursor: just lock the filter
-                        // (exit typing, keep the text) so the full keymap works.
                         _ => state.filtering = false,
                     },
                     KeyCode::Backspace => {
@@ -294,8 +256,6 @@ pub fn tui_phase(state: &mut HubState, existing_term: Option<crate::tui::Tty>) -
         }
     })();
     let phase = result?;
-    // When opening detail, hand the terminal over instead of tearing down —
-    // detail will reuse it, eliminating the LeaveAlternateScreen flash.
     if matches!(phase, PhaseResult::OpenDetail) {
         return Ok((phase, Some(terminal)));
     }

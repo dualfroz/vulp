@@ -1,7 +1,3 @@
-//! Renderers for the detail view's git-native tabs (Overview, Commits,
-//! Branches, Files, Stats, Settings) — everything drawn into the left
-//! 73%-width pane that doesn't depend on a provider API response.
-
 use super::super::{HistEntry, St, StatsPeriod};
 use ratatui::{
     layout::{Constraint, Rect},
@@ -11,11 +7,6 @@ use ratatui::{
     Frame,
 };
 
-// ── 1. Overview tab ───────────────────────────────────────────────────────────
-
-/// Draws a one-screen summary: location/links, repo-level stats, recent
-/// releases, recent commits, top contributors, and active branches — the
-/// "at a glance" tab shown by default when opening a repo.
 pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
     let r   = &st.summary;
     let dim = Style::default().fg(Color::DarkGray);
@@ -34,7 +25,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
 
     let mut lines: Vec<Line> = vec![];
 
-    // ── location & links ──
     lines.push(Line::from(Span::styled("  Location & Links", yel.add_modifier(Modifier::BOLD))));
     lines.push(sep());
     lines.push(kv("Path", &st.summary.path.to_string_lossy(), Color::DarkGray));
@@ -45,7 +35,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    // ── repository stats ──
     lines.push(Line::from(Span::styled("  Repository", yel.add_modifier(Modifier::BOLD))));
     lines.push(sep());
 
@@ -76,7 +65,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    // ── latest version + recent releases ──
     let tags: Vec<_> = st.history.iter().filter_map(|h| {
         if let HistEntry::Tag { name, age, .. } = h { Some((name.clone(), age.clone())) } else { None }
     }).collect();
@@ -93,7 +81,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // ── recent commits ──
     if !st.ov_recent.is_empty() {
         lines.push(Line::from(Span::styled("  Recent Commits", yel.add_modifier(Modifier::BOLD))));
         lines.push(sep());
@@ -108,7 +95,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // ── top contributors ──
     if !st.contributors.is_empty() {
         lines.push(Line::from(Span::styled("  Top Contributors", yel.add_modifier(Modifier::BOLD))));
         lines.push(sep());
@@ -121,7 +107,6 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // ── active branches ──
     if !st.branches.is_empty() {
         lines.push(Line::from(Span::styled("  Active Branches", yel.add_modifier(Modifier::BOLD))));
         lines.push(sep());
@@ -144,18 +129,13 @@ pub fn render_overview(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-// ── 2. Commits tab ───────────────────────────────────────────────────────────
-
-/// Draws the merged commit/tag timeline. Local-only commits (not yet
-/// pushed) are marked with `↑` and listed first, so the "ahead" count from
-/// the topbar has a visible explanation here.
 pub fn render_commits(f: &mut Frame, st: &St, area: Rect) {
     let avail  = area.height.saturating_sub(1) as usize;
-    let ahead  = st.summary.ahead; // first N commits are local-only
+    let ahead  = st.summary.ahead;
     let header = Row::new(vec!["", "SHA", "AGE", "AUTHOR", "MESSAGE"])
         .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
 
-    let mut commit_idx = 0usize; // count Commit entries seen so far (for ahead marker)
+    let mut commit_idx = 0usize;
     let rows: Vec<Row> = st.history.iter()
         .skip(st.hist_off)
         .take(avail)
@@ -187,7 +167,6 @@ pub fn render_commits(f: &mut Frame, st: &St, area: Rect) {
         })
         .collect();
 
-    // Legend for local-only indicator
     let legend = if ahead > 0 {
         Rect::new(area.x, area.y + area.height.saturating_sub(1), area.width, 1)
     } else {
@@ -221,9 +200,6 @@ pub fn render_commits(f: &mut Frame, st: &St, area: Rect) {
     }
 }
 
-// ── 3. Branches tab ──────────────────────────────────────────────────────────
-
-/// Draws the branch table, scrolled to keep `branch_cursor` in view.
 pub fn render_branches(f: &mut Frame, st: &St, area: Rect) {
     if st.branches.is_empty() {
         f.render_widget(
@@ -280,10 +256,6 @@ pub fn render_branches(f: &mut Frame, st: &St, area: Rect) {
     );
 }
 
-// ── 4. Files tab (tree) ───────────────────────────────────────────────────────
-
-/// Draws the flattened file tree, with a one-character dirty-status marker
-/// (`M`/`D`/`?`) next to any file that also appears in `st.files`.
 pub fn render_file_tree(f: &mut Frame, st: &St, area: Rect) {
     if st.tree_visible.is_empty() {
         f.render_widget(
@@ -337,10 +309,6 @@ pub fn render_file_tree(f: &mut Frame, st: &St, area: Rect) {
     f.render_widget(List::new(items), area);
 }
 
-// ── 5. Stats tab ─────────────────────────────────────────────────────────────
-
-/// Draws the period selector, activity bar chart, and a key-metrics summary
-/// (avg commits/month, LOC, largest files) for the selected `stats_period`.
 pub fn render_stats(f: &mut Frame, st: &St, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let yel = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
@@ -350,7 +318,6 @@ pub fn render_stats(f: &mut Frame, st: &St, area: Rect) {
         StatsPeriod::Day90, StatsPeriod::Year1, StatsPeriod::AllTime,
     ];
 
-    // ── Period selector row ──
     let mut period_spans: Vec<Span> = vec![Span::styled("  Period: ", dim)];
     for p in all_periods {
         if p == st.stats_period {
@@ -368,11 +335,9 @@ pub fn render_stats(f: &mut Frame, st: &St, area: Rect) {
     let period_h = 2u16;
     let period_area = Rect::new(area.x, area.y, area.width, period_h);
 
-    // ── Chart area ──
     let chart_h = (area.height.saturating_sub(period_h + 2)).clamp(5, 20);
     let chart_area = Rect::new(area.x, area.y + period_h, area.width, chart_h);
 
-    // ── Bottom metrics ──
     let metrics_y = area.y + period_h + chart_h + 1;
     let metrics_h = area.height.saturating_sub(period_h + chart_h + 2);
     let metrics_area = if metrics_h > 0 {
@@ -381,16 +346,13 @@ pub fn render_stats(f: &mut Frame, st: &St, area: Rect) {
         Rect::new(0, 0, 0, 0)
     };
 
-    // Render period selector
     f.render_widget(Paragraph::new(vec![
         Line::from(period_spans),
         super::dsep(area.width),
     ]), period_area);
 
-    // Render vertical bar chart
     render_bar_chart(f, &st.activity_data, chart_area);
 
-    // Render bottom metrics
     if metrics_h > 0 {
         let kv = |k: &str, v: &str, col: Color| -> Line<'static> {
             Line::from(vec![
@@ -432,31 +394,24 @@ pub fn render_stats(f: &mut Frame, st: &St, area: Rect) {
     }
 }
 
-/// Draws a vertical bar chart of `data` (label, count) pairs, sized to fit
-/// `area` exactly. Bar width and label sampling both scale down gracefully
-/// as the chart gets narrower, rather than overflowing or panicking.
 fn render_bar_chart(f: &mut Frame, data: &[(String, usize)], area: Rect) {
     if data.is_empty() || area.height < 3 || area.width < 10 {
         return;
     }
 
     let max_v   = data.iter().map(|d| d.1).max().unwrap_or(1).max(1);
-    let axis_w  = 6usize; // "  123 │"
+    let axis_w  = 6usize;
     let avail_w = area.width.saturating_sub(axis_w as u16) as usize;
     let n_cols  = data.len();
-    // Each column: bar_chars + 1 space. bar_chars = col_w chars.
     let col_w   = ((avail_w).saturating_sub(n_cols)) / n_cols.max(1);
     let col_w   = col_w.clamp(1, 4);
-    let chart_h = area.height.saturating_sub(2) as usize; // -1 for axis, -1 for labels
+    let chart_h = area.height.saturating_sub(2) as usize;
 
     let mut lines: Vec<Line> = vec![];
 
-    // Build chart rows from top to bottom
     for row in 0..chart_h {
-        // row 0 = top (high values), row chart_h-1 = bottom (0)
         let mut spans: Vec<Span<'static>> = vec![];
 
-        // Y-axis label
         let y_val = max_v * (chart_h - row) / chart_h;
         let y_lbl = if row == 0 {
             format!("{:>4} │", max_v)
@@ -470,10 +425,7 @@ fn render_bar_chart(f: &mut Frame, data: &[(String, usize)], area: Rect) {
         spans.push(Span::styled(y_lbl, Style::default().fg(Color::DarkGray)));
 
         for d in data.iter() {
-            // bar_h = how many rows this column fills from bottom
-            let bar_h = if max_v == 0 { 0 } else { (d.1 * chart_h / max_v).min(chart_h) };
-            // Current row is filled if (row from bottom) < bar_h
-            // row from bottom = chart_h - 1 - row
+            let bar_h = (d.1 * chart_h).checked_div(max_v).unwrap_or(0).min(chart_h);
             let row_from_bottom = chart_h.saturating_sub(1).saturating_sub(row);
             let filled = row_from_bottom < bar_h;
             let bar_str = if filled {
@@ -487,11 +439,9 @@ fn render_bar_chart(f: &mut Frame, data: &[(String, usize)], area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    // X-axis
     let x_axis = format!("     └{}", "─".repeat((col_w + 1) * n_cols + 1));
     lines.push(Line::from(Span::styled(x_axis, Style::default().fg(Color::DarkGray))));
 
-    // Labels (show every Nth to avoid crowding)
     let label_every = ((n_cols as u16 * (col_w as u16 + 1)) / area.width.max(1) + 1) as usize;
     let mut label_spans: Vec<Span<'static>> = vec![Span::raw("      ".to_string())];
     for (i, d) in data.iter().enumerate() {
@@ -507,11 +457,6 @@ fn render_bar_chart(f: &mut Frame, data: &[(String, usize)], area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-// ── 6. Settings tab ───────────────────────────────────────────────────────────
-
-/// Draws the Settings tab: GitHub API actions, local-file shortcuts
-/// (.gitignore/LICENSE/README), and git operations, each as a numbered,
-/// cursor-selectable row sharing layout with `settings_row`.
 pub fn render_settings(f: &mut Frame, st: &St, area: Rect) {
     let dim  = Style::default().fg(Color::DarkGray);
     let cyn  = Style::default().fg(Color::Cyan);
@@ -573,7 +518,6 @@ pub fn render_settings(f: &mut Frame, st: &St, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Section: GitHub API
     lines.push(Line::from(Span::styled("  GitHub API", yel)));
     lines.push(super::dsep(area.width));
     for (i, item) in items[..7].iter().enumerate() {
@@ -581,7 +525,6 @@ pub fn render_settings(f: &mut Frame, st: &St, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    // Section: Local Files
     lines.push(Line::from(Span::styled("  Local Files", yel)));
     lines.push(super::dsep(area.width));
     for (i, item) in items[7..].iter().enumerate() {
@@ -589,7 +532,6 @@ pub fn render_settings(f: &mut Frame, st: &St, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    // Section: Git Operations
     struct GitItem { label: &'static str, value: String, hint: &'static str }
     let stash_hint = if st.stash_count > 0 { format!("{} stashed", st.stash_count) } else { String::new() };
     let git_items: &[GitItem] = &[
@@ -607,12 +549,9 @@ pub fn render_settings(f: &mut Frame, st: &St, area: Rect) {
 
     f.render_widget(Paragraph::new(lines), area);
 
-    // Suppress unused variable warnings via inline references
     let _ = (cyn, red);
 }
 
-/// Draws one numbered row of the Settings tab, sharing column widths across
-/// all three sections so the cursor highlight lines up consistently.
 fn settings_row(
     idx:    usize,
     label:  &str,

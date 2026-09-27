@@ -1,198 +1,200 @@
-# Poradnik dla grafika — jak używać vulp
+# Guide for designers: how to use vulp
 
-> Ten poradnik zakłada, że nigdy wcześniej nie używałeś terminalu do pracy z kodem. Spokojnie — to jest prostsze niż myślisz.
-
----
-
-## Co to jest i po co to komuś?
-
-Wyobraź sobie, że każdy projekt (strona, aplikacja, assets) mieszka w osobnym folderze na GitHubie. `vulp` to program, który pozwala ci zarządzać tymi wszystkimi folderami jednocześnie — zobaczyć co się zmieniło, wysłać zmiany na serwer, pobrać najnowszą wersję — wszystko bez klikania po interfejsie GitHuba.
-
-**Dla Ciebie oznacza to:** zamiast wchodzić na stronę GitHuba i klikać w każde repozytorium osobno, wpisujesz jedną komendę i widzisz status wszystkiego.
+> This guide assumes you have never used a terminal to work with code. Relax, it is simpler than it looks.
 
 ---
 
-## Krok 1 — Instalacja
+## What is it and who is it for?
+
+Imagine that every project (a website, an app, a set of assets) lives in its own folder on GitHub. `vulp` is a program that lets you manage all of those folders at once: see what changed, send your changes to the server, get the latest version, all without clicking through the GitHub website.
+
+**For you this means:** instead of opening every repository on GitHub one by one, you type one command and see the state of everything.
+
+---
+
+## Step 1: Install
 
 ### Windows
 
-1. Pobierz plik `vulp.exe` z sekcji [Releases](https://github.com/twoj-team/vulp/releases) (zakładka "Assets")
-2. Przenieś plik do folderu `C:\Users\TwojeImie\` (czyli do swojego folderu domowego)
-3. Otwórz **Terminal** (wyszukaj "Terminal" w menu Start, lub `Windows + R` → wpisz `cmd` → Enter)
-4. Wpisz `vulp --version` i naciśnij Enter — jeśli widzisz numer wersji, instalacja się udała
-
-> Jeśli system pyta "Czy chcesz uruchomić ten plik?" — kliknij "Tak" / "Uruchom mimo to".
-
-### Linux (np. Linux Mint)
-
-Otwórz terminal i wklej:
+Open **PowerShell** (search for "PowerShell" in the Start menu) and paste:
 ```
-curl -fsSL https://github.com/twoj-team/vulp/install.sh | bash
+irm https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.ps1 | iex
 ```
-Gotowe.
+Then close and reopen PowerShell, type `vulp --version` and press Enter. If you see a version number, the installation worked.
+
+You can also download `vulp-windows-x86_64.exe` by hand from the [Releases](https://github.com/dualfroz/vulp/releases) page (the "Assets" section), rename it to `vulp.exe` and move it to a folder that is on your `PATH`.
+
+### Linux (for example Linux Mint)
+
+Open a terminal and paste:
+```
+curl -fsSL https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.sh | bash
+```
+Done.
 
 ### macOS
 
+There is no prebuilt binary for macOS. You need Rust ([rustup.rs](https://rustup.rs)), and then, in the folder with the vulp source code:
 ```
-brew install twoj-team/tap/vulp
+cargo install --path .
 ```
-(wymaga Homebrew — jeśli nie masz, zapytaj kolegę programistę)
 
 ---
 
-## Krok 2 — Pierwsze uruchomienie (robisz to RAZ)
+## Step 2: First run (you do this ONCE)
 
-Otwórz terminal i wpisz:
+Open a terminal and type:
 
 ```
 vulp config
 ```
 
-Pojawi się ekran konfiguracji. Ustaw:
+A settings screen appears. Set:
 
-| Pole | Co wpisać |
+| Field | What to enter |
 |---|---|
-| `workspace_root` | Folder gdzie trzymasz projekty, np. `C:\Users\TwojeImie\projekty` lub `/home/twoje/projekty` |
-| `username` | Twoje imię i nazwisko lub nick (to będzie widoczne w commitach) |
-| `email` | Twój email z GitHuba |
+| `workspace_root` | The folder where you keep your projects, e.g. `C:\Users\YourName\projects` or `/home/you/projects` |
+| `username` | Your name or nickname (it will be visible in commits) |
+| `email` | The email address of your GitHub account |
 
-Poruszasz się strzałkami, edytujesz pole po naciśnięciu Enter, zapisujesz przez `q` lub `Ctrl+S`.
-
----
-
-## Krok 3 — Podłącz konto GitHub (robisz to RAZ)
-
-Potrzebujesz **tokenu dostępu** z GitHuba. Oto jak go zdobyć:
-
-1. Wejdź na [github.com/settings/tokens](https://github.com/settings/tokens)
-2. Kliknij **"Generate new token (classic)"**
-3. Wpisz nazwę (np. "vulp na moim laptopie")
-4. Zaznacz: `repo` (cały zakres)
-5. Kliknij **"Generate token"** na dole
-6. **Skopiuj token** — zobaczysz go tylko raz!
-
-Teraz wróć do terminalu i wpisz (zamień `TWOJ_TOKEN` na skopiowany token):
-
-```
-vulp auth add --provider github --token TWOJ_TOKEN
-```
-
-Gotowe. Token jest bezpiecznie zapisany na Twoim komputerze.
+Move with the arrow keys, press Enter to edit a field and Enter again to accept it. Press `q` or `Esc` to save and leave.
 
 ---
 
-## Codzienne użycie
+## Step 3: Connect your GitHub account (you do this ONCE)
 
-### Sprawdź co się dzieje we wszystkich projektach
-
-```
-vulp status
-```
-
-Zobaczysz tabelę z projektami. Co oznaczają kolumny:
+If the GitHub CLI (`gh`) is already installed and logged in on your computer, this is all you need:
 
 ```
-  #   NAZWA           BRANCH     AHEAD  BEHIND  DIRTY  OSTATNI COMMIT
-  1   projekt-strona  main           0       2      ✗   2h temu
-  2   projekt-logo    develop        1       0      ✓   wczoraj
+vulp auth import
 ```
 
-| Kolumna | Co znaczy |
+Otherwise you need an **access token** from GitHub. Here is how to get one:
+
+1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Click **"Generate new token (classic)"**
+3. Enter a name (e.g. "vulp on my laptop")
+4. Tick `repo` (the whole scope)
+5. Click **"Generate token"** at the bottom
+6. **Copy the token**, you will only see it once!
+
+Now go back to the terminal and type (replace `YOUR_TOKEN` with the copied token):
+
+```
+vulp auth add --provider github --token YOUR_TOKEN
+```
+
+Done. The token is stored on your computer only.
+
+---
+
+## Everyday use
+
+### See what is going on in all projects
+
+```
+vulp list
+```
+
+You get one line per project: its name, the current branch, status marks and the main language. The marks mean:
+
+| Mark | Meaning |
 |---|---|
-| `AHEAD` | Masz zmiany gotowe do wysłania na serwer |
-| `BEHIND` | Na serwerze są nowsze zmiany — ktoś coś dodał |
-| `DIRTY ✓` | Masz niezapisane zmiany (jak "niezapisany dokument") |
+| warning sign | You have unsaved changes (like an "unsaved document") |
+| down arrow | There are newer changes on the server, someone added something |
+| up arrow | You have changes ready to send to the server |
 
-**Poruszanie się:** strzałki góra/dół, `Enter` żeby wejść w szczegóły projektu, `q` żeby wyjść.
+For a full picture of a single project, type `vulp status` and the project name, e.g. `vulp status website`.
 
----
-
-### Pobierz najnowszą wersję projektu
-
-Jeśli `BEHIND` pokazuje liczbę większą od 0, ktoś dodał zmiany na serwerze. Pobierz je:
-
-```
-vulp sync pull --all
-```
-
-To pobierze najnowszą wersję **wszystkich** projektów naraz.
+To see everything on one screen, type just `vulp`. Switch tabs with `Tab` or the arrow keys, move up and down with the arrow keys, press `Enter` to open a project and `q` to leave. `?` lists every key.
 
 ---
 
-### Wyślij swoje zmiany na serwer
+### Get the latest version of your projects
 
-Masz nowe pliki (np. nowe grafiki, zaktualizowane assets)? Użyj interaktywnego trybu:
+If a project shows the down arrow, someone added changes on the server. Get them:
 
 ```
-vulp sync
+vulp sync --all
 ```
 
-Pojawi się ekran z listą projektów. Obsługa:
-
-1. **Zaznacz projekt** — naciśnij `Spacja` przy projekcie który chcesz wysłać. Możesz zaznaczyć kilka.
-   - `a` — zaznacz wszystkie naraz
-2. **Naciśnij Enter** — przejdziesz do wyboru akcji
-3. **Wybierz "Commit"** — strzałkami, potem Enter. Wpisz opis zmian (np. "nowe bannery dla kampanii Q2"), Enter.
-4. **Wybierz "Push"** — to faktycznie wysyła na serwer.
-
-> **Commit vs Push:** Commit to jak "zapisanie wersji" lokalnie. Push to wysłanie tej wersji na serwer. Zawsze robisz najpierw Commit, potem Push.
+This downloads the latest version of **all** projects at once.
 
 ---
 
-### Szybki push z linii komend (jeśli wiesz co robisz)
+### Send your changes to the server
+
+Do you have new files (new graphics, updated assets)? Use the interactive screen:
 
 ```
-vulp sync push --all -m "aktualizacja grafik landing page"
+vulp
 ```
 
-To jednocześnie commita (z wiadomością po `-m`) i pushuje wszystkie zmienione projekty.
+1. Go to the **Repos** tab (`Tab` or the arrow keys).
+2. **Select a project** by pressing `Space` next to it. You can select several.
+   - `Ctrl+A` selects all of them at once
+3. **Press `s`** to open the sync menu.
+4. **Choose "Commit+Push"** with the arrow keys, then Enter. Replace the suggested message with a short description of your changes (e.g. "new banners for the Q2 campaign") and press Enter.
+
+> **Commit vs push:** a commit is like "saving a version" on your computer. A push sends that version to the server. "Commit+Push" does both, one after the other. "Push only" sends versions you have already committed.
 
 ---
 
-## Słowniczek
+### Quick push from the command line (if you know what you are doing)
 
-| Słowo | Po ludzku |
+```
+vulp sync --all --action commit-push -m "landing page graphics update"
+```
+
+This commits (with the message after `-m`) and pushes every changed project in one go.
+
+---
+
+## Glossary
+
+| Word | In plain words |
 |---|---|
-| **Repozytorium** (repo) | Folder projektu na GitHubie. Jak teczka z plikami projektu. |
-| **Commit** | Zapisanie wersji plików z opisem "co zmieniłem". Jak ctrl+S z etykietką. |
-| **Push** | Wysłanie swoich zmian na serwer GitHuba. |
-| **Pull** | Pobranie zmian z serwera na swój komputer. |
-| **Branch** | Wersja projektu. `main` to główna, `develop` to robocza. |
-| **Dirty** | Pliki zmienione ale jeszcze nie scommitowane. |
-| **Merge** | Połączenie dwóch wersji projektu w jedną. Robi to zwykle programista. |
+| **Repository** (repo) | A project folder on GitHub. Like a binder with the project's files. |
+| **Commit** | Saving a version of the files with a note "what I changed". Like Ctrl+S with a label. |
+| **Push** | Sending your changes to the GitHub server. |
+| **Pull** | Getting changes from the server onto your computer. |
+| **Branch** | A version of the project. `main` is the main one, `develop` is the working one. |
+| **Dirty** | Files that were changed but not committed yet. |
+| **Merge** | Joining two versions of a project into one. Usually done by a developer. |
 
 ---
 
-## Coś nie działa?
+## Something does not work?
 
-**Terminal nie zna komendy `vulp`**
-- Windows: sprawdź czy plik `vulp.exe` jest w folderze który jest w PATH. Najprostsze rozwiązanie: przenieś plik do `C:\Windows\System32\`
-- Linux/Mac: sprawdź czy `~/.cargo/bin` jest w PATH, lub uruchom ręcznie: `./vulp`
+**The terminal does not know the `vulp` command**
+- Windows: close and reopen PowerShell. If you installed by hand, check that the folder with `vulp.exe` is on your PATH.
+- Linux: the installer puts vulp in `~/.local/bin`. Close and reopen the terminal; if it still does not work, add that folder to your PATH.
+- macOS: check that `~/.cargo/bin` is on your PATH.
 
-**"Permission denied" lub "access denied"**
-- Linux/Mac: wpisz `chmod +x vulp` przed pierwszym uruchomieniem
+**"Permission denied" or "access denied"**
+- Linux/macOS: type `chmod +x vulp` before the first run of a file you downloaded by hand
 
-**"Authentication failed" przy push/pull**
-- Token prawdopodobnie wygasł lub nie ma uprawnień do `repo`
-- Wygeneruj nowy token i dodaj: `vulp auth add --provider github --token NOWY_TOKEN`
+**"Authentication failed" on push or pull**
+- The token has probably expired or does not have the `repo` scope
+- Generate a new token and add it: `vulp auth add --provider github --token NEW_TOKEN`
 
-**Nie widzę swoich projektów w `vulp status`**
-- Sprawdź czy `workspace_root` w `vulp config` wskazuje na właściwy folder
-- Folder musi zawierać podfoldery z projektami (każdy projekt to osobny podfolder z `.git` w środku)
+**I do not see my projects in `vulp list`**
+- Check that `workspace_root` in `vulp config` points to the right folder
+- The folder has to contain project folders (every project is a separate folder with a `.git` folder inside)
 
-**Zmiany się nie wysyłają, `vulp sync push` nic nie robi**
-- Najpierw sprawdź `vulp status` — kolumna `DIRTY` musi być `✓` żeby był co wysyłać
-- Jeśli `DIRTY` jest `✗`, ale `AHEAD` > 0 — wystarczy sam push bez commita
+**My changes are not sent, push does nothing**
+- First run `vulp list --dirty`: a project only has something to commit when it shows up there
+- If it does not show up, but `vulp list --ahead` lists it, a plain push is enough: `vulp sync PROJECT --action push`
 
 ---
 
-## Szybka ściąga
+## Cheat sheet
 
 ```
-vulp status              # sprawdź co się dzieje
-vulp sync pull --all     # pobierz najnowsze wersje
-vulp sync                # interaktywny ekran: commit + push
-vulp sync push --all -m "opis zmian"   # szybki commit + push
-vulp auth add --provider github --token TOKEN   # dodaj konto
-vulp config              # zmień ustawienia
+vulp                     # everything on one screen
+vulp list                # what is going on
+vulp sync --all          # get the latest versions
+vulp sync --all --action commit-push -m "what changed"   # quick commit + push
+vulp auth add --provider github --token TOKEN            # add an account
+vulp config              # change settings
 ```

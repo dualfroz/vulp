@@ -3,9 +3,9 @@ name = "vulp"
 version = "0.1.0"
 edition = "2021"
 description = "Multi-repo git workflow manager"
-authors = ["dualfroz"]
+authors = ["Michał Fox"]
 license = "MIT"
-repository = "https://github.com/dualfroz/fxg"
+repository = "https://github.com/dualfroz/vulp"
 readme = "README.md"
 keywords = ["git", "tui", "cli", "workflow", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
@@ -40,3 +40,6 @@ tree-sitter-python = "0.25.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-go = "0.25.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,23 +1,12 @@
-//! `exec_action` — the repo-detail view's dispatcher for actions that need
-//! to leave the TUI's alternate screen (interactive `inquire` prompts,
-//! launching `$EDITOR`, blocking git subprocesses with visible output).
-//! `run_detail_loop` in `mod.rs` calls this between `leave_tui`/`enter_tui`,
-//! so everything here runs with the terminal back in normal/cooked mode.
-
 use super::git::{build_history, checkout_branch, git_run, list_branches, push_branch};
 use super::settings_io::{try_load_settings, try_make_provider};
 use super::types::{RepoSettings, St};
 use crate::util::launch_editor;
 use anyhow::Result;
 
-/// Runs the action identified by `idx` (one of the numeric codes set on
-/// `st.run_action`/passed in from a modal). Numeric codes rather than an enum
-/// because they're produced from several different call sites (key handlers,
-/// modal confirms, settings-tab rows) that don't otherwise share a type.
 pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
     let path = st.summary.path.clone();
     match idx {
-        // ── 0: sync ──────────────────────────────────────────────────────────
         0 => {
             println!("\n── Sync: {} ──\n", st.summary.name);
             let mode       = st.pending_sync_mode.take().unwrap_or_else(|| "pull".into());
@@ -29,13 +18,12 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
                     git_run(&path, &["commit", "-m", &commit_msg]);
                     git_run(&path, &["push"]);
                 }
-                _ => { git_run(&path, &["push"]); } // push_only
+                _ => { git_run(&path, &["push"]); }
             }
             println!("\n  Press Enter to return...");
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 1: release ───────────────────────────────────────────────────────
         1 => {
             println!("\n── Release: {} ──\n", st.summary.name);
             let tag_name = st.pending_tag_name.take().unwrap_or_default();
@@ -53,7 +41,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 30: checkout branch ──────────────────────────────────────────────
         30 => {
             if let Some(b) = st.branches.get(st.branch_cursor) {
                 let name = b.name.clone();
@@ -73,10 +60,8 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             }
         }
 
-        // ── 31: delete branch (handled in-TUI via ConfirmAction modal) ──────
         31 => {}
 
-        // ── 106-109: open in editor (leave_tui is handled by run_detail_loop) ─
         106 => {
             let editor = st.cfg_editor.clone();
             if let Err(e) = launch_editor(&editor, &path) {
@@ -105,7 +90,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             }
         }
 
-        // ── 110: open pending_file in editor ────────────────────────────────
         110 => {
             if let Some(file) = st.pending_file.take() {
                 let editor = st.cfg_editor.clone();
@@ -115,7 +99,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             }
         }
 
-        // ── 32: push branch ──────────────────────────────────────────────────
         32 => {
             if let Some(b) = st.branches.get(st.branch_cursor) {
                 let name = b.name.clone();
@@ -132,7 +115,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 50: load settings from GitHub API ───────────────────────────────
         50 => {
             let local_visibility = st.summary.visibility.clone().unwrap_or_else(|| "unknown".into());
             match try_load_settings(st).await {
@@ -148,7 +130,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             }
         }
 
-        // ── 60: toggle visibility ────────────────────────────────────────────
         60 => {
             println!("\n── Visibility: {} ──\n", st.summary.name);
             let choice = inquire::Select::new("Set visibility:", vec!["public", "private"])
@@ -172,7 +153,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 61: edit description ─────────────────────────────────────────────
         61 => {
             println!("\n── Description ──\n");
             let current = st.settings.as_ref().map(|s| s.description.as_str()).unwrap_or("").to_string();
@@ -192,7 +172,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 62: edit topics ──────────────────────────────────────────────────
         62 => {
             println!("\n── Topics ──\n");
             let current = st.settings.as_ref().map(|s| s.topics.join(", ")).unwrap_or_default();
@@ -214,7 +193,6 @@ pub async fn exec_action(st: &mut St, idx: usize) -> Result<()> {
             let _ = std::io::stdin().lines().next();
         }
 
-        // ── 63: add collaborator ─────────────────────────────────────────────
         63 => {
             println!("\n── Add Collaborator ──\n");
             if let Some(user) = inquire::Text::new("GitHub username:").prompt_skippable()? {

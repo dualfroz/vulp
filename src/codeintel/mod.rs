@@ -1,14 +1,3 @@
-//! Tree-sitter-based code intelligence: list functions, find usages, rename
-//! an identifier, convert naming convention, and aggregate repo stats.
-//!
-//! Tree-sitter (not regex/naive find-replace) is the explicit choice here:
-//! it parses real syntax trees, so a rename only ever touches genuine
-//! identifier nodes — never matches inside strings/comments, and never
-//! confuses a function name with an unrelated object property of the same
-//! name (see `lang::identifier_query`). Every walk also skips
-//! `crate::util::EXCLUDED_DIRS` (`.git`, `target`, `node_modules`, `vendor`,
-//! ...), so rename/find-usages never reach into dependency code.
-
 pub mod lang;
 
 use lang::{function_query, identifier_query, lang_for_ext, ts_language, Lang};
@@ -16,7 +5,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 
-/// Verbosity level for `list_functions`' display lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FuncFormat {
     NamesOnly,
@@ -24,7 +12,6 @@ pub enum FuncFormat {
     WithMeta,
 }
 
-/// One function/method definition found in a repo.
 #[derive(Debug, Clone)]
 pub struct FunctionInfo {
     pub name: String,
@@ -35,7 +22,6 @@ pub struct FunctionInfo {
     pub ref_count: usize,
 }
 
-/// One place an identifier is referenced, found by `find_usages`.
 #[derive(Debug, Clone)]
 pub struct UsageLocation {
     pub file: String,
@@ -44,9 +30,6 @@ pub struct UsageLocation {
     pub context: String,
 }
 
-/// One identifier-node rewrite: the byte range to replace in `file` and
-/// what to replace it with. `start_byte`/`end_byte` are what `apply_rename_plan`
-/// actually splices on; `line`/`col` are only for the human-readable preview.
 #[derive(Debug, Clone)]
 pub struct RenameEdit {
     pub file: PathBuf,
@@ -58,15 +41,12 @@ pub struct RenameEdit {
     pub new_text: String,
 }
 
-/// A dry-run set of rename edits, shown to the user as a preview before
-/// `apply_rename_plan` writes anything to disk.
 #[derive(Debug, Clone, Default)]
 pub struct RenamePlan {
     pub edits: Vec<RenameEdit>,
 }
 
 impl RenamePlan {
-    /// Number of distinct files this plan touches.
     pub fn file_count(&self) -> usize {
         let mut files: Vec<&PathBuf> = self.edits.iter().map(|e| &e.file).collect();
         files.sort();
@@ -75,8 +55,6 @@ impl RenamePlan {
     }
 }
 
-/// A function-name casing convention, used as the target for
-/// `build_convention_plan`'s bulk rename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamingConvention {
     Snake,
@@ -85,7 +63,6 @@ pub enum NamingConvention {
 }
 
 impl NamingConvention {
-    /// Display label shown in the convention picker.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Snake  => "snake_case",
@@ -94,10 +71,6 @@ impl NamingConvention {
         }
     }
 
-    /// Guesses a name's current convention from its shape (contains `_` →
-    /// snake_case; starts uppercase → PascalCase; starts lowercase →
-    /// camelCase). Returns `None` for ambiguous/empty names, so
-    /// `build_convention_plan` can skip them rather than mis-convert.
     fn detect(name: &str) -> Option<Self> {
         if name.is_empty() { return None; }
         if name.contains('_') { return Some(Self::Snake); }
@@ -108,8 +81,6 @@ impl NamingConvention {
         }
     }
 
-    /// Splits `name` into words (via `split_words`) and rejoins them in this
-    /// convention.
     fn convert(&self, name: &str) -> String {
         let words = split_words(name);
         match self {
@@ -152,10 +123,6 @@ fn join_camel_pascal(words: &[String], pascal: bool) -> String {
     out
 }
 
-/// Reads and parses `path` with the tree-sitter grammar matching its
-/// extension. Returns `None` for unsupported extensions or unreadable/
-/// unparseable files, rather than an error — every caller is a best-effort
-/// repo-wide walk where one bad file shouldn't abort the whole scan.
 fn parse_file(path: &Path) -> Option<(Lang, String, tree_sitter::Tree)> {
     let ext = path.extension()?.to_str()?.to_lowercase();
     let lang = lang_for_ext(&ext)?;
@@ -170,11 +137,6 @@ fn rel_path(repo_path: &Path, path: &Path) -> String {
     path.strip_prefix(repo_path).unwrap_or(path).to_string_lossy().to_string()
 }
 
-/// Every function/method definition found in `repo_path`. `ref_count` is the
-/// number of identifier-reference nodes across the whole repo matching that
-/// function's name (a coarse cross-reference count — not full call-graph
-/// resolution, but enough to flag "this is referenced nowhere" or "this is
-/// referenced everywhere").
 pub fn list_functions(repo_path: &Path, _format: FuncFormat) -> Vec<FunctionInfo> {
     let mut out: Vec<FunctionInfo> = Vec::new();
     crate::util::walk_files(repo_path, &mut |path| {
@@ -245,8 +207,6 @@ pub fn list_functions(repo_path: &Path, _format: FuncFormat) -> Vec<FunctionInfo
     out
 }
 
-/// Every place `identifier` appears as a plain identifier reference or
-/// declaration (not a string, comment, or unrelated member-property name).
 pub fn find_usages(repo_path: &Path, identifier: &str) -> Vec<UsageLocation> {
     let mut out = Vec::new();
     crate::util::walk_files(repo_path, &mut |path| {
@@ -275,11 +235,6 @@ pub fn find_usages(repo_path: &Path, identifier: &str) -> Vec<UsageLocation> {
     out
 }
 
-/// Single pass over the repo collecting a `RenameEdit` for every identifier
-/// node whose text is a key of `renames`. Shared by `build_rename_plan`
-/// (one old→new pair) and `build_convention_plan` (many pairs at once) so
-/// converting an entire repo's naming convention costs one walk, not one
-/// walk per renamed identifier.
 fn build_rename_edits(repo_path: &Path, renames: &HashMap<String, String>) -> Vec<RenameEdit> {
     let mut edits = Vec::new();
     crate::util::walk_files(repo_path, &mut |path| {
@@ -313,19 +268,12 @@ fn build_rename_edits(repo_path: &Path, renames: &HashMap<String, String>) -> Ve
     edits
 }
 
-/// Builds a dry-run plan for renaming `old` to `new`. Does not touch disk —
-/// call `apply_rename_plan` after the caller has shown the preview and
-/// gotten an explicit confirmation.
 pub fn build_rename_plan(repo_path: &Path, old: &str, new: &str) -> RenamePlan {
     let mut renames = HashMap::new();
     renames.insert(old.to_string(), new.to_string());
     RenamePlan { edits: build_rename_edits(repo_path, &renames) }
 }
 
-/// Builds a dry-run plan converting every function name in `repo_path` that
-/// doesn't already match `target` to that convention. Scoped to function
-/// definitions found by `list_functions` (not every variable/binding in the
-/// repo) — a deliberately bounded, predictable scope for a bulk rename.
 pub fn build_convention_plan(repo_path: &Path, target: NamingConvention) -> RenamePlan {
     let funcs = list_functions(repo_path, FuncFormat::NamesOnly);
     let mut renames: HashMap<String, String> = HashMap::new();
@@ -340,10 +288,6 @@ pub fn build_convention_plan(repo_path: &Path, target: NamingConvention) -> Rena
     RenamePlan { edits: build_rename_edits(repo_path, &renames) }
 }
 
-/// Applies a previously-built plan: groups edits by file, applies each
-/// file's edits back-to-front by byte offset (so earlier offsets in the same
-/// file stay valid even when old/new names differ in length), and writes
-/// each file once. Returns the number of edits actually applied.
 pub fn apply_rename_plan(plan: &RenamePlan) -> std::io::Result<usize> {
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<&PathBuf, Vec<&RenameEdit>> = BTreeMap::new();
@@ -352,7 +296,7 @@ pub fn apply_rename_plan(plan: &RenamePlan) -> std::io::Result<usize> {
     }
     let mut applied = 0usize;
     for (file, mut edits) in by_file {
-        edits.sort_by(|a, b| b.start_byte.cmp(&a.start_byte));
+        edits.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
         let mut bytes = std::fs::read(file)?;
         for e in edits {
             if e.start_byte > e.end_byte || e.end_byte > bytes.len() { continue; }
@@ -364,20 +308,16 @@ pub fn apply_rename_plan(plan: &RenamePlan) -> std::io::Result<usize> {
     Ok(applied)
 }
 
-/// Aggregate stats over a repo's source files, returned by `repo_stats`.
 #[derive(Debug, Clone, Default)]
 pub struct RepoCodeStats {
     pub total_functions: usize,
     pub total_files: usize,
     pub lang_counts: Vec<(String, usize)>,
     pub avg_fn_len: f64,
-    pub longest_functions: Vec<(String, String, usize)>, // file, name, length_lines
-    pub largest_files: Vec<(String, usize)>,             // file, loc
+    pub longest_functions: Vec<(String, String, usize)>,
+    pub largest_files: Vec<(String, usize)>,
 }
 
-/// Read-only aggregate stats over every tree-sitter-supported source file in
-/// `repo_path`. Unlike rename/find-usages, this is safe to run repo-wide
-/// without any confirmation step — nothing is mutated.
 pub fn repo_stats(repo_path: &Path) -> RepoCodeStats {
     let funcs = list_functions(repo_path, FuncFormat::NamesOnly);
 
@@ -401,15 +341,128 @@ pub fn repo_stats(repo_path: &Path) -> RepoCodeStats {
 
     let mut longest_functions: Vec<(String, String, usize)> = funcs.iter()
         .map(|f| (f.file.clone(), f.name.clone(), f.length_lines)).collect();
-    longest_functions.sort_by(|a, b| b.2.cmp(&a.2));
+    longest_functions.sort_by_key(|(_, _, lines)| std::cmp::Reverse(*lines));
     longest_functions.truncate(10);
 
     let mut largest_files: Vec<(String, usize)> = file_loc.into_iter().collect();
-    largest_files.sort_by(|a, b| b.1.cmp(&a.1));
+    largest_files.sort_by_key(|(_, loc)| std::cmp::Reverse(*loc));
     largest_files.truncate(10);
 
     let mut lang_counts: Vec<(String, usize)> = lang_counts.into_iter().collect();
-    lang_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    lang_counts.sort_by_key(|(_, files)| std::cmp::Reverse(*files));
 
     RepoCodeStats { total_functions, total_files, lang_counts, avg_fn_len, longest_functions, largest_files }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUST_SRC: &str = "fn fetch_data(url: &str, retries: u32) -> String {\n    let _ = retries;\n    url.to_string()\n}\n\nfn main() {\n    let label = \"fetch_data\";\n    // fetch_data is called below\n    fetch_data(label, 1);\n}\n";
+
+    fn write(root: &Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+
+    fn sample_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/lib.rs", RUST_SRC);
+        write(dir.path(), "app.py", "def load_config(path, strict=False):\n    return path\n");
+        write(dir.path(), "main.go", "package main\n\nfunc Add(a int, b int) int { return a + b }\n");
+        write(dir.path(), "web/ui.ts", "export const toUpper = (s: string): string => s.toUpperCase();\nfunction greet(name: string) { return name; }\n");
+        write(dir.path(), "target/gen.rs", "fn generated() {}\n");
+        write(dir.path(), "README.md", "fetch_data\n");
+        dir
+    }
+
+    #[test]
+    fn every_language_query_compiles() {
+        for lang in [Lang::Rust, Lang::Python, Lang::JavaScript, Lang::TypeScript, Lang::Tsx, Lang::Go] {
+            Query::new(&ts_language(lang), function_query(lang)).unwrap_or_else(|e| panic!("{lang:?}: {e}"));
+            Query::new(&ts_language(lang), identifier_query(lang)).unwrap_or_else(|e| panic!("{lang:?}: {e}"));
+        }
+    }
+
+    #[test]
+    fn functions_are_listed_across_languages() {
+        let dir = sample_repo();
+        let funcs = list_functions(dir.path(), FuncFormat::WithMeta);
+        let summary: Vec<(&str, &str, usize)> = funcs.iter().map(|f| (f.file.as_str(), f.name.as_str(), f.line)).collect();
+        assert_eq!(summary, [
+            ("app.py", "load_config", 1),
+            ("main.go", "Add", 3),
+            ("src/lib.rs", "fetch_data", 1),
+            ("src/lib.rs", "main", 6),
+            ("web/ui.ts", "toUpper", 1),
+            ("web/ui.ts", "greet", 2),
+        ]);
+        let fetch = &funcs[2];
+        assert_eq!(fetch.args, ["url: &str", "retries: u32"]);
+        assert_eq!(fetch.length_lines, 4);
+        assert_eq!(fetch.ref_count, 2);
+        assert_eq!(funcs[0].args, ["path", "strict=False"]);
+        assert_eq!(funcs[1].args, ["a int", "b int"]);
+    }
+
+    #[test]
+    fn usages_skip_strings_and_comments() {
+        let dir = sample_repo();
+        let usages = find_usages(dir.path(), "fetch_data");
+        let places: Vec<(&str, usize, usize)> = usages.iter().map(|u| (u.file.as_str(), u.line, u.col)).collect();
+        assert_eq!(places, [("src/lib.rs", 1, 4), ("src/lib.rs", 9, 5)]);
+        assert_eq!(usages[1].context, "fetch_data(label, 1);");
+        assert!(find_usages(dir.path(), "generated").is_empty());
+    }
+
+    #[test]
+    fn rename_rewrites_identifiers_only() {
+        let dir = sample_repo();
+        let plan = build_rename_plan(dir.path(), "fetch_data", "download");
+        assert_eq!(plan.edits.len(), 2);
+        assert_eq!(plan.file_count(), 1);
+        assert_eq!(apply_rename_plan(&plan).unwrap(), 2);
+
+        let src = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+        assert!(src.starts_with("fn download(url: &str"));
+        assert!(src.contains("    download(label, 1);"));
+        assert!(src.contains("\"fetch_data\""));
+        assert!(src.contains("// fetch_data is called below"));
+        assert_eq!(std::fs::read_to_string(dir.path().join("README.md")).unwrap(), "fetch_data\n");
+        assert!(build_rename_plan(dir.path(), "fetch_data", "x").edits.is_empty());
+    }
+
+    #[test]
+    fn convention_plan_renames_functions_and_call_sites() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "lib.rs", "fn fetchUserData() {}\nfn already_snake() {}\nfn main() { fetchUserData(); already_snake(); }\n");
+        let plan = build_convention_plan(dir.path(), NamingConvention::Snake);
+        assert!(plan.edits.iter().all(|e| e.old_text == "fetchUserData" && e.new_text == "fetch_user_data"));
+        assert_eq!(apply_rename_plan(&plan).unwrap(), 2);
+        let src = std::fs::read_to_string(dir.path().join("lib.rs")).unwrap();
+        assert_eq!(src, "fn fetch_user_data() {}\nfn already_snake() {}\nfn main() { fetch_user_data(); already_snake(); }\n");
+    }
+
+    #[test]
+    fn naming_conventions_convert_between_each_other() {
+        assert_eq!(NamingConvention::Camel.convert("fetch_user_id"), "fetchUserId");
+        assert_eq!(NamingConvention::Pascal.convert("fetchUserId"), "FetchUserId");
+        assert_eq!(NamingConvention::Snake.convert("FetchUserId"), "fetch_user_id");
+        assert_eq!(NamingConvention::detect("load_all"), Some(NamingConvention::Snake));
+        assert_eq!(NamingConvention::detect("Loader"), Some(NamingConvention::Pascal));
+        assert_eq!(NamingConvention::detect("loader"), Some(NamingConvention::Camel));
+        assert_eq!(NamingConvention::detect(""), None);
+    }
+
+    #[test]
+    fn stats_aggregate_supported_files() {
+        let dir = sample_repo();
+        let stats = repo_stats(dir.path());
+        assert_eq!(stats.total_functions, 6);
+        assert_eq!(stats.total_files, 4);
+        assert_eq!(stats.largest_files[0], ("src/lib.rs".to_string(), 10));
+        assert_eq!(stats.longest_functions[0].1, "main");
+        assert_eq!(stats.lang_counts.len(), 4);
+    }
 }

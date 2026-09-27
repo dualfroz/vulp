@@ -1,7 +1,3 @@
-//! Rendering for the project detail sub-view (`project_detail`): top/bottom
-//! bars, the six tabs (Overview, Commits, Repos, Stats, Todos, Settings),
-//! and the rename/color-picker modal overlays.
-
 use super::project_detail::{AggCommit, ProjectTab, St, PROJ_PALETTE};
 use crate::todos::TodoStatus;
 use ratatui::{
@@ -36,7 +32,6 @@ pub fn draw(f: &mut Frame, st: &St) {
 
     render_bottombar(f, st, vert[2]);
 
-    // Modal overlays
     if let Some(ref input) = st.rename_input {
         draw_text_modal(f, area, "Rename Project", input, "Enter new name | Esc cancel");
     }
@@ -123,15 +118,14 @@ fn render_overview(f: &mut Frame, st: &St, area: Rect) {
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(area);
 
-    // LEFT: project info + health bar + repo list
     {
         let dirty_c  = st.repos.iter().filter(|r| r.is_dirty).count();
         let behind_c = st.repos.iter().filter(|r| r.behind > 0).count();
         let ahead_c  = st.repos.iter().filter(|r| r.ahead > 0).count();
         let total    = st.repos.len();
 
-        let clean_n  = if total > 0 { (20 * total.saturating_sub(dirty_c + behind_c)) / total } else { 20 };
-        let dirty_n  = if total > 0 { (20 * dirty_c)  / total } else { 0 };
+        let clean_n  = (20 * total.saturating_sub(dirty_c + behind_c)).checked_div(total).unwrap_or(20);
+        let dirty_n  = (20 * dirty_c).checked_div(total).unwrap_or(0);
         let behind_n = 20usize.saturating_sub(clean_n + dirty_n);
         let health_bar = format!("{}{}{}", "█".repeat(clean_n), "▓".repeat(dirty_n), "░".repeat(behind_n));
         let health_col = if behind_c > 0 { Color::Red } else if dirty_c > 0 { Color::Yellow } else { Color::Green };
@@ -170,7 +164,6 @@ fn render_overview(f: &mut Frame, st: &St, area: Rect) {
         f.render_widget(Paragraph::new(lines), cols[0]);
     }
 
-    // RIGHT: open todos + recent commits
     {
         let open_t: Vec<&crate::todos::Todo> = st.todos.iter()
             .filter(|t| matches!(t.status, TodoStatus::Open | TodoStatus::InProgress))
@@ -300,7 +293,7 @@ fn render_stats(f: &mut Frame, st: &St, area: Rect) {
     let step = if n > bar_w { (n / bar_w).max(1) } else { 1 };
     let sampled: Vec<&(String, usize)> = st.activity.iter().step_by(step).collect();
     let bar_count = sampled.len().min(bar_w);
-    let bar_width = if bar_count == 0 { 1 } else { (bar_w / bar_count).max(1) };
+    let bar_width = bar_w.checked_div(bar_count).unwrap_or(1).max(1);
 
     for row in (0..bar_h).rev() {
         let threshold = (row * max_count) / bar_h;
@@ -317,7 +310,6 @@ fn render_stats(f: &mut Frame, st: &St, area: Rect) {
         }
         lines.push(Line::from(spans));
     }
-    // X axis labels
     let nth = (bar_count / 6).max(1);
     let mut x_spans: Vec<Span> = vec![Span::raw("       ")];
     for j in 0..bar_count {
@@ -409,7 +401,6 @@ fn render_settings(f: &mut Frame, st: &St, area: Rect) {
         Line::from(Span::styled("  ────────────────────────────────────────────", dim)),
     ];
 
-    // Show palette swatches
     let per_row = 4;
     for chunk_start in (0..PROJ_PALETTE.len()).step_by(per_row) {
         let mut spans: Vec<Span> = vec![Span::raw("  ")];
@@ -470,7 +461,6 @@ fn draw_color_pick_modal(f: &mut Frame, area: Rect, cursor: usize, current_hex: 
 
     let per_row = 6usize;
     for row_start in (0..PROJ_PALETTE.len()).step_by(per_row) {
-        // Swatch row
         let mut swatch_spans: Vec<Span> = vec![Span::raw("  ")];
         for i in 0..per_row {
             if let Some((hex, _)) = PROJ_PALETTE.get(row_start + i) {
@@ -484,7 +474,6 @@ fn draw_color_pick_modal(f: &mut Frame, area: Rect, cursor: usize, current_hex: 
         }
         lines.push(Line::from(swatch_spans));
 
-        // Name row
         let mut name_spans: Vec<Span> = vec![Span::raw("  ")];
         for i in 0..per_row {
             if let Some((hex, name)) = PROJ_PALETTE.get(row_start + i) {
@@ -501,7 +490,6 @@ fn draw_color_pick_modal(f: &mut Frame, area: Rect, cursor: usize, current_hex: 
         lines.push(Line::from(""));
     }
 
-    // Show selected hex
     if let Some((hex, name)) = PROJ_PALETTE.get(cursor) {
         let (cr, cg, cb) = crate::projects::hex_to_rgb(hex);
         lines.push(Line::from(vec![

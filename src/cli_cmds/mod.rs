@@ -1,11 +1,3 @@
-//! Implementations of every non-TUI subcommand (`vulp list/sync/todo/...`).
-//! Shared contract (see `docs/cli.md`): `--json` prints machine-readable
-//! JSON on stdout; human output otherwise; progress/errors go to stderr.
-//! Nothing here ever prompts interactively — a missing argument is an error.
-//!
-//! Exit codes: 0 ok · 1 execution error · 2 bad usage (clap) ·
-//! 3 auth missing/invalid · 4 not found.
-
 mod digest;
 mod items;
 mod remote;
@@ -15,16 +7,12 @@ use crate::cli::Commands;
 use crate::config::AppConfig;
 use anyhow::Result;
 
-/// Global guardrail flags (`--dry-run`, `--force`) threaded into the
-/// mutating commands; read commands ignore them.
 #[derive(Clone, Copy)]
 pub(crate) struct Guard {
     pub dry_run: bool,
     pub force:   bool,
 }
 
-/// Dispatches one parsed subcommand. Only called for commands that aren't
-/// `Config`/`Auth`/the bare TUI (those keep their existing paths in `app.rs`).
 pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Result<()> {
     match cmd {
         Commands::List { dirty, behind, ahead, lang, project, alerts, stale_deploy, no_external, external } =>
@@ -55,15 +43,11 @@ pub async fn run(cmd: Commands, json: bool, guard: Guard, cfg: &AppConfig) -> Re
     }
 }
 
-// ── shared helpers ────────────────────────────────────────────────────────────
-
-/// Prints `msg` to stderr and exits with `code` (1 error / 3 auth / 4 not found).
 pub(crate) fn die(code: i32, msg: &str) -> ! {
     eprintln!("error: {msg}");
     std::process::exit(code);
 }
 
-/// Serializes `v` as pretty JSON on stdout.
 pub(crate) fn out_json<T: serde::Serialize>(v: &T) {
     match serde_json::to_string_pretty(v) {
         Ok(s) => println!("{s}"),
@@ -71,9 +55,6 @@ pub(crate) fn out_json<T: serde::Serialize>(v: &T) {
     }
 }
 
-/// Scans the workspace synchronously (labels already applied by the scan)
-/// and enriches each repo with cached API metadata (stars, PR/issue counts,
-/// CI status, Dependabot alerts) — same view the TUI shows on startup.
 pub(crate) fn scan_repos(cfg: &AppConfig) -> Vec<crate::status::RepoSummary> {
     let mut repos = match crate::status::scan_workspace(&cfg.workspace_root, &[]) {
         Ok(r) => r,
@@ -95,8 +76,6 @@ pub(crate) fn scan_repos(cfg: &AppConfig) -> Vec<crate::status::RepoSummary> {
     repos
 }
 
-/// Finds one repo by (case-insensitive) display name or directory basename;
-/// exits 4 when nothing matches.
 pub(crate) fn find_repo(cfg: &AppConfig, name: &str) -> crate::status::RepoSummary {
     let repos = scan_repos(cfg);
     let needle = name.to_lowercase();
@@ -110,8 +89,6 @@ pub(crate) fn find_repo(cfg: &AppConfig, name: &str) -> crate::status::RepoSumma
     }
 }
 
-/// The default (or first) configured account plus its provider client.
-/// Exits 3 when no account or token is usable.
 pub(crate) fn default_provider(cfg: &AppConfig) -> (crate::auth::Account, Box<dyn crate::providers::Provider>) {
     let accounts = crate::auth::load_accounts(cfg).unwrap_or_default();
     let Some(acc) = accounts.iter().find(|a| a.is_default).or(accounts.first()).cloned() else {
@@ -123,8 +100,6 @@ pub(crate) fn default_provider(cfg: &AppConfig) -> (crate::auth::Account, Box<dy
     }
 }
 
-/// Whether `r` is listed in config `protected_repos` (display name or dir
-/// basename, case-insensitive).
 pub(crate) fn is_protected(cfg: &AppConfig, r: &crate::status::RepoSummary) -> bool {
     let name = r.name.to_lowercase();
     let base = r.path.file_name().map(|b| b.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -134,7 +109,6 @@ pub(crate) fn is_protected(cfg: &AppConfig, r: &crate::status::RepoSummary) -> b
     })
 }
 
-/// Exits 1 when any target is protected and `--force` wasn't passed.
 pub(crate) fn guard_protected(cfg: &AppConfig, force: bool, targets: &[&crate::status::RepoSummary]) {
     if force { return; }
     let blocked: Vec<&str> = targets.iter()
@@ -146,8 +120,6 @@ pub(crate) fn guard_protected(cfg: &AppConfig, force: bool, targets: &[&crate::s
     }
 }
 
-/// Logs one vulp-performed action to `~/.vulp/activity.log` (same log the
-/// TUI writes, so CLI actions show up in the Overview feed too).
 pub(crate) fn log_activity(kind: crate::activity::ActivityKind, repo: &str, detail: String) {
     crate::activity::log(&crate::activity::ActivityEntry {
         ts: chrono::Utc::now().timestamp(),
@@ -155,4 +127,38 @@ pub(crate) fn log_activity(kind: crate::activity::ActivityKind, repo: &str, deta
         repo: repo.to_string(),
         detail,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo(name: &str, path: &str) -> crate::status::RepoSummary {
+        crate::status::RepoSummary {
+            name: name.into(), path: path.into(), branch: "main".into(),
+            ahead: 0, behind: 0, is_dirty: false,
+            last_commit_msg: String::new(), last_commit_age: String::new(), last_commit_ts: 0,
+            last_tag: None, visibility: None, branch_count: 1, owner: None, remote_repo_name: None,
+            has_license: false, lang: None, bookmarked: false,
+            stars: None, open_issues: None, open_prs: None, stash_count: 0,
+            ci_status: None, dependabot_open: None, deploy_status: None,
+        }
+    }
+
+    #[test]
+    fn protection_matches_label_or_directory_case_insensitively() {
+        let cfg = AppConfig { protected_repos: vec![" Billing ".into(), "infra".into()], ..AppConfig::default() };
+        assert!(is_protected(&cfg, &repo("billing", "/ws/billing")));
+        assert!(is_protected(&cfg, &repo("Production Infra", "/ws/ops/INFRA")));
+        assert!(!is_protected(&cfg, &repo("billing-ui", "/ws/billing-ui")));
+        assert!(!is_protected(&AppConfig::default(), &repo("billing", "/ws/billing")));
+    }
+
+    #[test]
+    fn force_skips_the_protection_check() {
+        let cfg = AppConfig { protected_repos: vec!["billing".into()], ..AppConfig::default() };
+        let target = repo("billing", "/ws/billing");
+        guard_protected(&cfg, true, &[&target]);
+        guard_protected(&cfg, false, &[&repo("other", "/ws/other")]);
+    }
 }

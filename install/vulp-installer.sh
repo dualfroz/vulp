@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the latest vulp release for Linux x86_64.
-# Usage: curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install/vulp-installer.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.sh | bash
 set -euo pipefail
 
 REPO="${VULP_REPO:-dualfroz/vulp}"

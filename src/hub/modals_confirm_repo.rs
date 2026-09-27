@@ -1,23 +1,12 @@
-//! `process_modal_confirm` arms for repo-creation flows: the bulk-import
-//! affiliation picker, clone/init/link/import-directory, repo templates,
-//! the workspace-wide "remove .git" action, and the copy-URL picker.
-
 use super::modals_spawn::{
     fetch_orgs_blocking, open_template_picker, spawn_bulk_import, spawn_create_repo,
     spawn_publish_existing,
 };
 use super::state::{ConfirmTag, HubState, Modal, SelectTag, TextTag};
 
-/// Handles one step of a repo-creation, template-management, or workspace
-/// bulk-action modal chain. Returns `None` once `modal` has been consumed by
-/// one of this file's arms, or `Some(modal)` unchanged — this is the last
-/// file in `modals::process_modal_confirm`'s chain, so an unmatched modal is
-/// simply discarded by the caller either way.
 pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
     match modal {
         Modal::Multi { checks, tag: super::state::MultiTag::BulkImportAffiliation(acc_idx), .. } => {
-            // "Repos I own" is always included regardless of how it's left
-            // checked — bulk import without your own repos doesn't make sense.
             let affiliation = crate::providers::RepoAffiliation {
                 owner:        true,
                 collaborator: checks.get(1).copied().unwrap_or(false),
@@ -38,8 +27,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             let name = value.trim().to_string();
             if name.is_empty() { return None; }
 
-            // Repos can be created under an org instead of the personal account —
-            // ask first if the default account actually belongs to any.
             let orgs = fetch_orgs_blocking(state);
             if !orgs.is_empty() {
                 let mut opts = vec!["@me (personal account)".to_string()];
@@ -62,7 +49,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Repo creation with template ───────────────────────────────────────
         Modal::Select { cursor, tag: SelectTag::InitTemplate { name: repo_name, owner }, .. } => {
             let template = if cursor == 0 { None } else { state.templates.get(cursor - 1).cloned() };
             let target = state.workspace_root.join(&repo_name);
@@ -77,7 +63,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 state.status_msg = Some("git init failed".into());
                 return None;
             }
-            // create .vulp/meta.toml
             let vulp_dir = target.join(".vulp");
             let _ = std::fs::create_dir_all(&vulp_dir);
             let tmpl_name = template.as_ref().map(|t| t.name.as_str()).unwrap_or("blank");
@@ -94,7 +79,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Import directory as repos ─────────────────────────────────────────
         Modal::Text { value, tag: TextTag::ImportDir, .. } => {
             let src = super::modals::expand_tilde(&value);
             if !src.exists() {
@@ -142,7 +126,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Template management ───────────────────────────────────────────────
         Modal::Text { value, tag: TextTag::NewTemplateName, .. } => {
             let name = value.trim().to_string();
             if !name.is_empty() {
@@ -168,14 +151,13 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
         Modal::Select { cursor, tag: SelectTag::TemplateMenu(ti), .. } => {
-            if cursor == 1 { // Delete
+            if cursor == 1 {
                 let name = state.templates[ti].name.clone();
                 state.modal = Modal::Confirm {
                     message: format!("Delete template '{}'?", name),
                     tag: ConfirmTag::DeleteTemplate(ti),
                 };
             }
-            // cursor 0 is "view commands" — just dismiss
             None
         }
         Modal::Confirm { tag: ConfirmTag::DeleteTemplate(ti), .. } => {
@@ -188,7 +170,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
             None
         }
 
-        // ── Remove .git from all workspace repos ──────────────────────────────
         Modal::Confirm { tag: ConfirmTag::RemoveGitAll, .. } => {
             if state.pull_all_rx.is_some() {
                 state.status_msg = Some("A workspace job is already running — wait for it to finish.".into());
@@ -239,9 +220,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 return None;
             }
             if !src.join(".git").exists() {
-                // No git history at all: fully onboard it, same as "Create new empty
-                // repo" — stage everything that's already there, commit, create the
-                // remote, push.
                 spawn_create_repo(
                     state, src, name,
                     vec!["Linked into workspace  ✓".into()],
@@ -249,10 +227,6 @@ pub fn try_confirm(state: &mut HubState, modal: Modal) -> Option<Modal> {
                 );
                 return None;
             }
-            // Already has a .git — ask what to do with the existing history instead
-            // of silently guessing. A `.git` dir with zero commits (e.g. a bare
-            // `git init` with nothing committed yet) still offers "discard" as a
-            // no-op-equivalent option, which is harmless.
             state.modal = Modal::Select {
                 title: format!("'{}' already has a .git", name),
                 options: vec![

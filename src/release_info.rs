@@ -1,26 +1,16 @@
-//! Fetches GitHub release metadata for the hub's General Settings update
-//! tile: the latest published release, and (separately) the release that
-//! matches the version currently running.
-
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-/// The GitHub repo this binary is published from. Shared with the installer
-/// scripts (`install/vulp-installer.sh`/`.ps1`), which hit the same
-/// `releases/latest` endpoint to fetch the newest build. Overridable via
-/// `$VULP_REPO` (same env var the installers already honor), so a fork or a
-/// future rename doesn't require a rebuild just to fix the update-check tile.
 fn vulp_repo() -> String {
-    std::env::var("VULP_REPO").unwrap_or_else(|_| "dualfroz/fxg".to_string())
+    std::env::var("VULP_REPO").unwrap_or_else(|_| "dualfroz/vulp".to_string())
 }
 
-/// One GitHub release's metadata, trimmed to what the update tile shows.
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
     pub tag:          String,
     pub author:       String,
     pub published_at: String,
-    #[allow(dead_code)] pub body: String, // kept: release-notes preview (roadmap)
+    #[allow(dead_code)] pub body: String,
     pub html_url:     String,
 }
 
@@ -45,20 +35,14 @@ async fn fetch_release(url: &str) -> Result<ReleaseInfo> {
     })
 }
 
-/// Info about the very latest release on GitHub, regardless of what's running.
 pub async fn fetch_latest() -> Result<ReleaseInfo> {
     fetch_release(&format!("https://api.github.com/repos/{}/releases/latest", vulp_repo())).await
 }
 
-/// Info about the release matching the version actually running, if one was
-/// tagged (`v{CARGO_PKG_VERSION}`) — lets the tile show who shipped *this*
-/// build and when, not just what's newest.
 pub async fn fetch_current(version: &str) -> Result<ReleaseInfo> {
     fetch_release(&format!("https://api.github.com/repos/{}/releases/tags/v{version}", vulp_repo())).await
 }
 
-/// The `created_at` date (YYYY-MM-DD) of a GitHub user/org — for the General
-/// Settings tile's account "since" line. Unauthenticated public endpoint.
 pub async fn fetch_user_since(username: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .user_agent("vulp/0.1")
@@ -75,8 +59,28 @@ pub async fn fetch_user_since(username: &str) -> Result<String> {
     Ok(created.split('T').next().unwrap_or_default().to_string())
 }
 
-/// `true` when the latest published tag differs from the version running.
 pub fn is_outdated(current_version: &str, latest_tag: &str) -> bool {
     let latest = latest_tag.trim_start_matches('v');
     !latest.is_empty() && latest != current_version
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outdated_compares_against_the_latest_tag() {
+        assert!(!is_outdated("0.1.0", "v0.1.0"));
+        assert!(!is_outdated("0.1.0", "0.1.0"));
+        assert!(is_outdated("0.1.0", "v0.2.0"));
+        assert!(!is_outdated("0.1.0", ""));
+        assert!(!is_outdated("0.1.0", "v"));
+    }
+
+    #[test]
+    fn repo_defaults_to_the_published_one() {
+        if std::env::var_os("VULP_REPO").is_none() {
+            assert_eq!(vulp_repo(), "dualfroz/vulp");
+        }
+    }
 }

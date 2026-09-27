@@ -1,11 +1,3 @@
-//! Command-line surface: `clap` argument definitions. `vulp` with no
-//! subcommand launches the TUI hub; every hub operation is also reachable
-//! through a subcommand here so scripts and AI agents can drive vulp without
-//! a terminal UI. Machine consumers: pass `--json` and see `docs/cli.md`.
-//!
-//! Exit codes: 0 ok · 1 execution error · 2 bad usage (clap) ·
-//! 3 auth missing/invalid · 4 not found (repo/todo/project).
-
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -265,10 +257,6 @@ pub struct AuthArgs {
     pub action: Option<AuthAction>,
 }
 
-/// `vulp auth` subcommands. Account state is a flat list of credentials
-/// (one per provider account); `Switch` changes which one is the default
-/// rather than removing the others, so multiple accounts can stay configured
-/// at once.
 #[derive(Subcommand)]
 pub enum AuthAction {
     Add {
@@ -282,4 +270,89 @@ pub enum AuthAction {
     Remove  { account: String },
     Switch  { account: String },
     Test    { account: Option<String> },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("vulp").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn command_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn bare_invocation_opens_the_tui() {
+        let cli = parse(&[]);
+        assert!(cli.command.is_none());
+        assert!(!cli.json && !cli.dry_run && !cli.force);
+    }
+
+    #[test]
+    fn global_flags_work_after_the_subcommand() {
+        let cli = parse(&["sync", "a", "b", "--action", "commit-push", "-m", "msg", "--json", "--dry-run", "--force"]);
+        assert!(cli.json && cli.dry_run && cli.force);
+        match cli.command {
+            Some(Commands::Sync { repos, all, project, action, message, allow_secrets }) => {
+                assert_eq!(repos, ["a", "b"]);
+                assert!(!all && project.is_none() && !allow_secrets);
+                assert_eq!(action, "commit-push");
+                assert_eq!(message.as_deref(), Some("msg"));
+            }
+            _ => panic!("expected sync"),
+        }
+    }
+
+    #[test]
+    fn defaults_are_applied() {
+        match parse(&["sync", "--all"]).command {
+            Some(Commands::Sync { action, all, .. }) => { assert_eq!(action, "pull"); assert!(all); }
+            _ => panic!("expected sync"),
+        }
+        match parse(&["stats"]).command {
+            Some(Commands::Stats { period }) => assert_eq!(period, "30d"),
+            _ => panic!("expected stats"),
+        }
+        match parse(&["activity"]).command {
+            Some(Commands::Activity { limit, kind }) => { assert_eq!(limit, 20); assert!(kind.is_none()); }
+            _ => panic!("expected activity"),
+        }
+        match parse(&["pr", "create", "--repo", "r", "--title", "t", "--head", "h"]).command {
+            Some(Commands::Pr { action: PrCmd::Create { base, .. } }) => assert_eq!(base, "main"),
+            _ => panic!("expected pr create"),
+        }
+        match parse(&["repo", "collab", "r", "u"]).command {
+            Some(Commands::Repo { action: RepoCmd::Collab { role, .. } }) => assert_eq!(role, "push"),
+            _ => panic!("expected repo collab"),
+        }
+        match parse(&["repo", "label", "r"]).command {
+            Some(Commands::Repo { action: RepoCmd::Label { name, .. } }) => assert_eq!(name, ""),
+            _ => panic!("expected repo label"),
+        }
+        match parse(&["project", "create", "p"]).command {
+            Some(Commands::Project { action: ProjectCmd::Create { color, .. } }) => assert_eq!(color, "#3da7ff"),
+            _ => panic!("expected project create"),
+        }
+    }
+
+    #[test]
+    fn invalid_usage_is_rejected() {
+        for args in [
+            vec!["status"],
+            vec!["release", "r"],
+            vec!["todo", "done", "not-a-number"],
+            vec!["list", "--bogus"],
+            vec!["frobnicate"],
+        ] {
+            let err = Cli::try_parse_from(std::iter::once("vulp").chain(args.iter().copied()))
+                .err()
+                .unwrap_or_else(|| panic!("{args:?} should fail"));
+            assert_eq!(err.exit_code(), 2, "{args:?}");
+        }
+    }
 }

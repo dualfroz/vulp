@@ -1,11 +1,3 @@
-//! Author-filtered activity analytics: the existing `GlobalStats` (Overview/
-//! old Stats tab) counts *every* commit on HEAD, which for a workspace with
-//! big forks (95%+ of this workspace's commits are upstream history) makes
-//! "your activity" fictional. This module scans only commits whose author
-//! email is actually yours — streak, 52-week heatmap, hour/day histograms —
-//! sharing one git invocation per repo so adding a metric never costs a
-//! second scan.
-
 pub mod cache;
 pub mod cadence;
 pub mod size;
@@ -14,20 +6,13 @@ use crate::config::AppConfig;
 use chrono::{Datelike, Local, NaiveDate};
 use std::collections::{HashMap, HashSet};
 
-/// One of your own commits: the local calendar date and hour it was made.
 #[derive(Debug, Clone, Copy)]
 pub struct OwnCommit {
     pub date: NaiveDate,
-    // kept: hour_pattern (Sprint D Stats-tab redesign)
     #[allow(dead_code)]
     pub hour: u32,
 }
 
-/// Resolves which author identities count as "you": configured
-/// `stats_author_emails`, falling back to `git config user.email`, plus
-/// every configured account's GitHub no-reply address (`{id+}username@
-/// users.noreply.github.com`) — the most common gap, since squash-merges
-/// done from the GitHub web UI carry that address instead of your real one.
 pub struct OwnEmailMatcher {
     emails:    HashSet<String>,
     usernames: Vec<String>,
@@ -57,7 +42,6 @@ impl OwnEmailMatcher {
         Self { emails, usernames }
     }
 
-    /// Whether `email` belongs to you.
     pub fn is_own(&self, email: &str) -> bool {
         let email = email.trim().to_lowercase();
         if self.emails.contains(&email) { return true; }
@@ -68,10 +52,6 @@ impl OwnEmailMatcher {
         self.usernames.iter().any(|u| u == uname)
     }
 
-    /// A combined `--author` extended-regex matching every known identity —
-    /// lets `git log` do the filtering instead of materializing every
-    /// commit (some forks in this workspace have thousands) just to throw
-    /// most of them away in Rust. `None` when nothing is configured at all.
     fn author_regex(&self) -> Option<String> {
         let mut alts: Vec<String> = self.emails.iter()
             .map(|e| format!("<{}>", escape_ere(e)))
@@ -92,16 +72,10 @@ fn escape_ere(s: &str) -> String {
     out
 }
 
-/// Scans one repo's local branches for your own commits. Filters at the git
-/// level via `--author` (cheap even on huge histories), then re-checks each
-/// result against `matcher.is_own` as a safety net against regex quirks.
 pub fn scan_repo_own_commits(path: &std::path::Path, matcher: &OwnEmailMatcher) -> Vec<OwnCommit> {
     let Some(regex) = matcher.author_regex() else { return vec![] };
     let out = std::process::Command::new("git")
         .arg("-C").arg(path)
-        // `-E`: `author_regex()` emits an extended-regex alternation (`a|b`);
-        // git's `--author` defaults to *basic* regex, where `|` is a literal
-        // and the pattern silently matches nothing — so this must be explicit.
         .args(["log", "--branches", "-E", "-i", &format!("--author={regex}")])
         .args(["--date=format-local:%Y-%m-%dT%H", "--pretty=format:%ae\x1f%ad"])
         .output();
@@ -116,29 +90,16 @@ pub fn scan_repo_own_commits(path: &std::path::Path, matcher: &OwnEmailMatcher) 
     }).collect()
 }
 
-/// Whether you've ever committed to the repo at `path`. A workspace clone
-/// you've never touched — a vendored/reference fork like an upstream
-/// `pterodactyl` — returns `Some(false)`; that's the signal used to mark and
-/// optionally hide such repos. Uses the same git-side `--author` filter as
-/// the stats scan with `--max-count=1`, so repos where you *do* have commits
-/// short-circuit on the first match and only a true zero-match clone walks
-/// its full history. `None` when no identity is configured (can't tell — the
-/// caller then treats the repo as yours).
 pub fn has_own_commit(path: &std::path::Path, matcher: &OwnEmailMatcher) -> Option<bool> {
     let regex = matcher.author_regex()?;
     let out = std::process::Command::new("git")
         .arg("-C").arg(path)
-        // `-E` for the same reason as `scan_repo_own_commits`: the regex is an
-        // extended-regex alternation that git's default basic-regex `--author`
-        // would treat as a literal `|` and never match.
         .args(["log", "--branches", "-E", "-i", &format!("--author={regex}"), "--max-count=1", "--format=%H"])
         .output()
         .ok()?;
-    // `--format=%H` prints "<sha>\n" on a match, nothing at all on none.
     Some(out.stdout.iter().any(|b| !b.is_ascii_whitespace()))
 }
 
-/// Scans every repo and merges the result into one date-sorted list.
 pub fn scan_workspace_own_commits(
     repos: &[crate::status::RepoSummary], matcher: &OwnEmailMatcher,
 ) -> Vec<OwnCommit> {
@@ -149,10 +110,6 @@ pub fn scan_workspace_own_commits(
     all
 }
 
-/// Current and longest streaks of consecutive local-calendar days with at
-/// least one commit. Grace rule: an empty *today* doesn't break the current
-/// streak until local midnight passes (checking at 8am shouldn't show a
-/// streak of yesterday's length as already broken).
 pub fn streak(commits: &[OwnCommit]) -> (u32, u32) {
     let days: std::collections::BTreeSet<NaiveDate> = commits.iter().map(|c| c.date).collect();
     if days.is_empty() { return (0, 0); }
@@ -181,9 +138,6 @@ pub fn streak(commits: &[OwnCommit]) -> (u32, u32) {
     (current, longest)
 }
 
-/// 364 days ending today, Monday-aligned, as `(date, count)` — a fixed 52×7
-/// grid a heatmap can render directly (missing days are `0`, not absent).
-// kept: Sprint D Stats-tab redesign (heatmap mockup in debata-2026-07-06/02-ux.md)
 #[allow(dead_code)]
 pub fn heatmap_52w(commits: &[OwnCommit]) -> Vec<(NaiveDate, u32)> {
     let mut counts: HashMap<NaiveDate, u32> = HashMap::new();
@@ -202,8 +156,6 @@ pub fn heatmap_52w(commits: &[OwnCommit]) -> Vec<(NaiveDate, u32)> {
     out
 }
 
-/// Weekday histogram (Mon=0..Sun=6) over the last `since_days` days.
-// kept: Sprint D Stats-tab redesign
 #[allow(dead_code)]
 pub fn day_pattern(commits: &[OwnCommit], since_days: i64) -> [u32; 7] {
     let cutoff = Local::now().date_naive() - chrono::Duration::days(since_days);
@@ -214,8 +166,6 @@ pub fn day_pattern(commits: &[OwnCommit], since_days: i64) -> [u32; 7] {
     out
 }
 
-/// Local-hour histogram (0..23) over the last `since_days` days.
-// kept: Sprint D Stats-tab redesign
 #[allow(dead_code)]
 pub fn hour_pattern(commits: &[OwnCommit], since_days: i64) -> [u32; 24] {
     let cutoff = Local::now().date_naive() - chrono::Duration::days(since_days);
@@ -226,17 +176,12 @@ pub fn hour_pattern(commits: &[OwnCommit], since_days: i64) -> [u32; 24] {
     out
 }
 
-/// Number of own commits in the last `since_days` days.
-// kept: Sprint D Stats-tab redesign (tile: "commits this period")
 #[allow(dead_code)]
 pub fn commits_since(commits: &[OwnCommit], since_days: i64) -> usize {
     let cutoff = Local::now().date_naive() - chrono::Duration::days(since_days);
     commits.iter().filter(|c| c.date > cutoff).count()
 }
 
-/// Number of distinct calendar days with >=1 own commit in the last
-/// `since_days` days.
-// kept: Sprint D Stats-tab redesign (tile: "active days")
 #[allow(dead_code)]
 pub fn active_days_since(commits: &[OwnCommit], since_days: i64) -> usize {
     let cutoff = Local::now().date_naive() - chrono::Duration::days(since_days);
@@ -246,12 +191,10 @@ pub fn active_days_since(commits: &[OwnCommit], since_days: i64) -> usize {
         .len()
 }
 
-/// Own commits with a date in `[from, to]` inclusive.
 pub fn commits_in_range(commits: &[OwnCommit], from: NaiveDate, to: NaiveDate) -> Vec<OwnCommit> {
     commits.iter().copied().filter(|c| c.date >= from && c.date <= to).collect()
 }
 
-/// Per-repo own-commit counts within `[from, to]`, sorted descending.
 pub fn top_repos_in_range(
     repos: &[crate::status::RepoSummary], matcher: &OwnEmailMatcher,
     from: NaiveDate, to: NaiveDate,
@@ -262,6 +205,99 @@ pub fn top_repos_in_range(
             .count();
         if n > 0 { Some((r.name.clone(), n)) } else { None }
     }).collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out.sort_by_key(|(_, commits)| std::cmp::Reverse(*commits));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::testgit::{commit_at, git, git_with_env, init_repo};
+    use chrono::Timelike;
+
+    fn matcher(emails: &[&str], usernames: &[&str]) -> OwnEmailMatcher {
+        OwnEmailMatcher {
+            emails: emails.iter().map(|e| e.to_string()).collect(),
+            usernames: usernames.iter().map(|u| u.to_string()).collect(),
+        }
+    }
+
+    fn day(s: &str) -> NaiveDate { NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap() }
+
+    fn commit(date: NaiveDate) -> OwnCommit { OwnCommit { date, hour: 12 } }
+
+    #[test]
+    fn own_identity_includes_github_noreply_addresses() {
+        let m = matcher(&["me@example.com"], &["octo"]);
+        assert!(m.is_own(" ME@example.com "));
+        assert!(m.is_own("octo@users.noreply.github.com"));
+        assert!(m.is_own("12345+octo@users.noreply.github.com"));
+        assert!(!m.is_own("12345+someone@users.noreply.github.com"));
+        assert!(!m.is_own("octo@example.com"));
+        assert!(!m.is_own("not-an-email"));
+    }
+
+    #[test]
+    fn author_regex_escapes_metacharacters() {
+        assert_eq!(matcher(&[], &[]).author_regex(), None);
+        assert_eq!(escape_ere("a.b+c@x(y)"), r"a\.b\+c@x\(y\)");
+        let regex = matcher(&["me+tag@example.com"], &["octo"]).author_regex().unwrap();
+        assert!(regex.contains(r"<me\+tag@example\.com>"));
+        assert!(regex.contains(r"octo@users\.noreply\.github\.com>"));
+    }
+
+    #[test]
+    fn longest_streak_counts_consecutive_days() {
+        assert_eq!(streak(&[]), (0, 0));
+        let commits: Vec<OwnCommit> = ["2020-01-01", "2020-01-02", "2020-01-02", "2020-01-03", "2020-02-10"]
+            .into_iter().map(|d| commit(day(d))).collect();
+        assert_eq!(streak(&commits), (0, 3));
+    }
+
+    #[test]
+    fn current_streak_survives_an_empty_today() {
+        let today = Local::now().date_naive();
+        let yesterday = today - chrono::Duration::days(1);
+        let commits = vec![commit(yesterday - chrono::Duration::days(1)), commit(yesterday)];
+        assert_eq!(streak(&commits), (2, 2));
+        let mut with_today = commits.clone();
+        with_today.push(commit(today));
+        assert_eq!(streak(&with_today), (3, 3));
+        let stale = vec![commit(today - chrono::Duration::days(3))];
+        assert_eq!(streak(&stale).0, 0);
+    }
+
+    #[test]
+    fn range_filter_is_inclusive() {
+        let commits: Vec<OwnCommit> = ["2030-03-01", "2030-03-05", "2030-03-08", "2030-03-09"]
+            .into_iter().map(|d| commit(day(d))).collect();
+        let picked: Vec<NaiveDate> = commits_in_range(&commits, day("2030-03-05"), day("2030-03-08"))
+            .into_iter().map(|c| c.date).collect();
+        assert_eq!(picked, [day("2030-03-05"), day("2030-03-08")]);
+    }
+
+    #[test]
+    fn only_own_commits_are_scanned() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = init_repo(&dir.path().join("fork"));
+        commit_at(&repo, "a.txt", "1", "mine", 1_700_000_000);
+        std::fs::write(repo.join("b.txt"), "2").unwrap();
+        git(&repo, &["add", "-A"]);
+        git_with_env(&repo, &["commit", "-q", "-m", "upstream"], &[
+            ("GIT_AUTHOR_EMAIL", "upstream@example.org".to_string()),
+        ]);
+
+        let mine = matcher(&["test@example.com"], &[]);
+        let found = scan_repo_own_commits(&repo, &mine);
+        assert_eq!(found.len(), 1);
+        let expected = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap().with_timezone(&Local);
+        assert_eq!(found[0].date, expected.date_naive());
+        assert_eq!(found[0].hour, expected.hour());
+        assert_eq!(has_own_commit(&repo, &mine), Some(true));
+
+        let stranger = matcher(&["nobody@example.net"], &[]);
+        assert!(scan_repo_own_commits(&repo, &stranger).is_empty());
+        assert_eq!(has_own_commit(&repo, &stranger), Some(false));
+        assert_eq!(has_own_commit(&repo, &matcher(&[], &[])), None);
+    }
 }

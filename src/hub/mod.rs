@@ -1,5 +1,3 @@
-// pub: the CLI (`cli_cmds`) reuses the bookmark/pin persistence and
-// remote-url helpers instead of duplicating them.
 pub mod actions;
 mod keys;
 mod keys_dispatch;
@@ -37,10 +35,6 @@ use crate::providers::{IssueDetail, PrDetail};
 use crate::status::RepoSummary;
 use std::collections::{HashMap, HashSet};
 
-/// Kicks off a one-time, best-effort fetch of release info for the General
-/// Settings tile: the very latest GitHub release (for the update check) and
-/// the release matching the version actually running (for "shipped by X on
-/// Y"). Unauthenticated, so it works with zero accounts configured.
 fn spawn_release_info_fetch(state: &mut HubState) {
     let (tx, rx) = std::sync::mpsc::channel();
     let version = env!("CARGO_PKG_VERSION").to_string();
@@ -96,9 +90,6 @@ pub async fn run_overview_tui(
     let accounts   = crate::auth::load_accounts_path(&cfg.data_dir).unwrap_or_default();
     let templates  = load_templates();
 
-    // The cache keeps every PR; the hub only surfaces the ones you can act on
-    // (yours-elsewhere or awaiting-your-review — see actions::pr_is_relevant),
-    // so PRs from repos you merely cloned don't clutter Overview and the tab.
     let cached_prs:    Vec<PrDetail>    =
         actions::relevant_prs(meta_cache.all_prs().into_iter().cloned(), &accounts);
     let cached_issues: Vec<IssueDetail> = meta_cache.all_issues().into_iter().cloned().collect();
@@ -129,7 +120,6 @@ pub async fn run_overview_tui(
         show_code_todos: false,
         todo_status_view: Default::default(),
         todo_group_by:    Default::default(),
-        // Done/Cancelled start collapsed — active work stays front and center.
         todo_group_collapsed: ["Done", "Cancelled"].into_iter().map(String::from).collect(),
         debug_mode,
         debug_log,
@@ -167,28 +157,20 @@ pub async fn run_overview_tui(
     for r in &mut state.repos {
         r.bookmarked = state.bookmarks.contains(&r.path);
     }
-    // Restore last session's tab + remember which repo to re-focus once the
-    // scan finishes (cursor can't be set yet — repos stream in unsorted).
     let session = session::load();
     state.tab = session::u8_to_tab(session.tab);
     state.pending_cursor_restore = session.cursor_repo_path;
     state.rebuild_display();
     spawn_release_info_fetch(&mut state);
-    // Tab starts on Overview, which now needs global stats (top repos/projects)
-    // and the local vulp action log for its tiles.
     keys::maybe_load_global_stats(&mut state);
     crate::activity::compact(5000);
     state.vulp_log = {
         let mut log = crate::activity::load_logged();
-        log.sort_by(|a, b| b.ts.cmp(&a.ts));
+        log.sort_by_key(|e| std::cmp::Reverse(e.ts));
         log.truncate(50);
         log
     };
 
-    // Carried across loop iterations so a terminal handed back by a sub-view
-    // (repo/project detail) can be reused by the next `tui_phase` call
-    // instead of tearing down and setting a fresh one up — see `tui_phase`'s
-    // doc comment for the flash this avoids.
     let mut carried_term: Option<crate::tui::Tty> = None;
     loop {
         let (phase_result, handed_term) = tui_phase(&mut state, carried_term.take())?;
@@ -211,9 +193,6 @@ pub async fn run_overview_tui(
                         repo_indices.iter().filter_map(|&ri| state.repos.get(ri)).cloned().collect();
                     carried_term = Some(project_detail::run(state.projects[pi].clone(), proj_repos, cfg, handed_term).await?);
                 }
-                // Detail view can rename/delete/archive repos or change branches —
-                // rescan so the hub's list reflects whatever just happened, instead
-                // of silently showing stale data until some other action refreshes it.
                 refresh_repos(&mut state);
             }
             PhaseResult::ExecSync => {

@@ -1,5 +1,5 @@
 # Installs the latest vulp release for Windows x86_64.
-# Usage: irm https://raw.githubusercontent.com/<owner>/<repo>/main/install/vulp-installer.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/dualfroz/vulp/main/install/vulp-installer.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:VULP_REPO) { $env:VULP_REPO } else { "dualfroz/vulp" }

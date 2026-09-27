@@ -1,24 +1,16 @@
-//! `Provider` implementation for Gitea and Forgejo (API-compatible forks),
-//! talking to the REST API v1 directly over `reqwest`.
-
 use super::{PrInfo, Provider, RepoInfo, RepoMeta};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::{header, Client, Response};
 use serde_json::{json, Value};
 
-/// Gitea / Forgejo REST API v1 provider.
 pub struct GiteaProvider {
     client:   Client,
     owner:    String,
-    base_url: String,   // e.g. "https://gitea.example.com/api/v1"
+    base_url: String,
 }
 
 impl GiteaProvider {
-    /// Builds a client authenticated with `token`, scoped to `owner`'s repos
-    /// by default. Unlike GitHub/GitLab, Gitea has no fixed default
-    /// `base_url` — every instance is self-hosted, so the caller always
-    /// supplies one.
     pub fn new(base_url: &str, owner: &str, token: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -34,20 +26,14 @@ impl GiteaProvider {
         })
     }
 
-    /// Joins `path` onto `base_url`, normalizing the slash between them.
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
-    /// Repo path segment: names may arrive as bare ("vulp" → account owner)
-    /// or fully qualified ("VulCodeCom/vulp" → used verbatim), so org-owned
-    /// repos work with a personal account's token.
     fn slug(&self, repo: &str) -> String {
         if repo.contains('/') { repo.to_string() } else { format!("{}/{}", self.owner, repo) }
     }
 
-    /// Parses a response as JSON if the status was successful, otherwise
-    /// turns the non-2xx status and body into an error.
     async fn check(resp: Response) -> Result<Value> {
         let status = resp.status();
         let text   = resp.text().await?;
@@ -126,7 +112,6 @@ impl Provider for GiteaProvider {
     async fn add_labels(
         &self, repo: &str, issue_number: u64, labels: &[String],
     ) -> Result<()> {
-        // Fetch existing labels to find IDs; create any that are missing
         let list_resp = self.client
             .get(self.url(&format!("repos/{}/labels", self.slug(repo))))
             .send().await?;

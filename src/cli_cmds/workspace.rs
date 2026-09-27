@@ -1,6 +1,3 @@
-//! Local-workspace CLI commands: list/status/scan, sync, stats, activity —
-//! everything that works off the on-disk repos without a provider API.
-
 use super::{die, find_repo, log_activity, out_json, scan_repos};
 use crate::config::AppConfig;
 use anyhow::Result;
@@ -155,7 +152,7 @@ pub fn sync(
         die(2, "specify repo names, --all, or --project");
     };
 
-    let action = action.replace('-', "_"); // commit-push → commit_push
+    let action = action.replace('-', "_");
     if !["pull", "push", "commit_push"].contains(&action.as_str()) {
         die(2, &format!("unknown action '{action}' (pull | push | commit-push)"));
     }
@@ -214,9 +211,6 @@ pub fn sync(
     Ok(())
 }
 
-/// `vulp brief` — one-shot workspace or per-repo picture for scripts and AI
-/// agents: local git state plus todos and the cached PR/issue lists (run
-/// `vulp refresh` first when freshness matters). Read-only.
 pub fn brief(cfg: &AppConfig, json: bool, repo: Option<String>) -> Result<()> {
     use crate::todos::TodoStatus;
 
@@ -279,7 +273,6 @@ pub fn brief(cfg: &AppConfig, json: bool, repo: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    // ── workspace-wide brief ──────────────────────────────────────────────
     let repos = scan_repos(cfg);
     let dirty  = repos.iter().filter(|r| r.is_dirty).count();
     let behind = repos.iter().filter(|r| r.behind > 0).count();
@@ -355,7 +348,7 @@ pub fn stats(cfg: &AppConfig, json: bool, period: &str) -> Result<()> {
         total += n;
         if n > 0 { per_repo.push((r.name.clone(), n)); }
     }
-    per_repo.sort_by(|a, b| b.1.cmp(&a.1));
+    per_repo.sort_by_key(|(_, commits)| std::cmp::Reverse(*commits));
 
     if json {
         #[derive(serde::Serialize)]
@@ -377,7 +370,7 @@ pub fn stats(cfg: &AppConfig, json: bool, period: &str) -> Result<()> {
 
 pub fn activity(json: bool, limit: usize, kind: Option<String>) -> Result<()> {
     let mut entries = crate::activity::load_logged();
-    entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
     if let Some(k) = &kind {
         entries.retain(|e| e.kind.label().eq_ignore_ascii_case(k));
     }

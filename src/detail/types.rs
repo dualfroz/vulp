@@ -1,19 +1,6 @@
-//! Data structures shared across the repo-detail view: the tab enum, the
-//! `St` struct holding all per-session state, and the small value types that
-//! populate it (history entries, branches, the file tree, settings).
-//!
-//! Kept separate from the logic that fills these fields (`settings_io.rs`,
-//! `keys.rs`, `actions.rs`) and the logic that draws them (`render.rs`) so
-//! that anyone trying to understand "what does the detail view know about a
-//! repo" can read one file without wading through control flow.
-
 use crate::status::RepoSummary;
 use std::path::PathBuf;
 
-// ── history entry ─────────────────────────────────────────────────────────────
-
-/// One row in the Commits tab: either a real commit or an annotated tag,
-/// merged into a single timeline sorted by `ts`.
 #[derive(Clone)]
 pub enum HistEntry {
     Commit { sha: String, age: String, ts: i64, author: String, msg: String },
@@ -24,10 +11,6 @@ impl HistEntry {
     pub fn ts(&self) -> i64 { match self { Self::Commit { ts, .. } | Self::Tag { ts, .. } => *ts } }
 }
 
-// ── new data structures ───────────────────────────────────────────────────────
-
-/// One row in the Branches tab, combining local branch state with its
-/// upstream tracking info (ahead/behind counts, last commit summary).
 #[derive(Clone)]
 pub struct BranchEntry {
     pub name:             String,
@@ -39,9 +22,6 @@ pub struct BranchEntry {
     pub last_commit_msg:  String,
 }
 
-/// One row in the Files tab's flattened tree view. `depth` and `expanded`
-/// drive `rebuild_tree_visible`'s collapse logic rather than a real nested
-/// tree structure, since a flat `Vec` is simpler to scroll and index into.
 #[derive(Clone)]
 pub struct TreeNode {
     pub name:     String,
@@ -51,18 +31,12 @@ pub struct TreeNode {
     pub expanded: bool,
 }
 
-/// One row in the Stats tab's contributor breakdown.
 #[derive(Clone)]
 pub struct ContribEntry {
     pub name:  String,
     pub count: usize,
 }
 
-
-/// Repo metadata fetched from the hosting provider's API for the Settings
-/// tab. `gh_auth_ok` distinguishes "we asked the API and it said no" from
-/// "we never had credentials to ask in the first place", since those need
-/// different fallback messaging.
 pub struct RepoSettings {
     pub visibility:  String,
     pub description: String,
@@ -70,9 +44,6 @@ pub struct RepoSettings {
     pub gh_auth_ok:  bool,
 }
 
-// ── stats period ──────────────────────────────────────────────────────────────
-
-/// Selectable time window for the Stats tab's activity chart.
 #[derive(PartialEq, Clone, Copy)]
 pub enum StatsPeriod { Day1, Day7, Day30, Day90, Year1, AllTime }
 
@@ -109,11 +80,6 @@ impl StatsPeriod {
     }
 }
 
-// ── Settings API operations (sent to background thread) ──────────────────────
-
-/// One mutating Settings-tab action, captured as data so it can be handed
-/// off to a background thread (`spawn_settings_op`) that owns the actual
-/// network call.
 pub enum SettingOp {
     Visibility { private: bool },
     Description { text: String },
@@ -124,28 +90,15 @@ pub enum SettingOp {
     Delete,
 }
 
-// ── TUI modals ────────────────────────────────────────────────────────────────
-
-/// All modal prompts the detail view can show. The `tag: u8` fields on the
-/// generic variants identify which logical action is in flight, since the
-/// same `SelectOption`/`EditText` shapes are reused for several different
-/// settings/sync/release flows.
 pub enum DetailModal {
     None,
     NewBranch { input: String, error: Option<String> },
-    // generic option selector (tag identifies the action)
     SelectOption { title: String, options: Vec<String>, cursor: usize, tag: u8 },
-    // generic text input (tag identifies the action)
     EditText { title: String, prompt: String, input: String, tag: u8 },
-    // add-collaborator step 2: name collected, now pick role
     SelectRole { collab_name: String, cursor: usize },
-    // dangerous confirm (archive, delete)
     ConfirmAction { message: String, tag: u8 },
 }
 
-// ── tabs ──────────────────────────────────────────────────────────────────────
-
-/// The detail view's tab bar, in display order.
 #[derive(PartialEq, Clone, Copy)]
 pub enum Tab { Overview, Commits, Branches, Files, Stats, Settings, PRs, Issues, Todos }
 
@@ -178,63 +131,49 @@ impl Tab {
     }
 }
 
-// ── state ─────────────────────────────────────────────────────────────────────
-
-/// All state for one open repo-detail session: a snapshot of every tab's
-/// data plus cursors/scroll offsets, loaded eagerly in `run()` (git data) or
-/// lazily on first tab visit (provider API data behind `*_rx` channels).
 pub struct St {
     pub summary:        RepoSummary,
     pub tab:            Tab,
     pub pending_file:   Option<PathBuf>,
 
-    // Commits tab
     pub history:        Vec<HistEntry>,
     pub hist_off:       usize,
     pub total_commits:  usize,
 
-    // Files (changed)
     pub files:          Vec<(char, String)>,
     pub file_count:     usize,
 
-    // Branches tab
     pub branches:       Vec<BranchEntry>,
     pub branch_cursor:  usize,
 
-    // Files tab (tree)
-    #[allow(dead_code)] pub all_files: Vec<String>, // kept: files-tab data model
+    #[allow(dead_code)] pub all_files: Vec<String>,
     pub tree_nodes:     Vec<TreeNode>,
     pub tree_visible:   Vec<usize>,
     pub tree_cursor:    usize,
     pub file_preview:   Vec<String>,
     pub preview_off:    usize,
 
-    // Stats tab
     pub contributors:   Vec<ContribEntry>,
     pub repo_age_days:  u64,
     pub stats_off:      usize,
     pub stats_period:   StatsPeriod,
-    pub activity_data:  Vec<(String, usize)>,   // current period's activity
+    pub activity_data:  Vec<(String, usize)>,
     pub loc_total:      usize,
-    pub top_files:      Vec<(String, usize)>,   // largest files by LOC
+    pub top_files:      Vec<(String, usize)>,
 
-    // Tags/stashes (shared)
     pub total_tags:     usize,
     pub stash_count:    usize,
 
-    // Overview tab
     pub ov_recent:      Vec<(String, String)>,
     pub ov_off:         usize,
     pub remote_url_str: Option<String>,
 
-    // Settings tab
     pub settings:       Option<RepoSettings>,
     pub settings_cursor: usize,
     pub settings_rx:    Option<std::sync::mpsc::Receiver<Result<RepoSettings, String>>>,
     pub settings_err:   Option<String>,
     pub api_rx:         Option<std::sync::mpsc::Receiver<Result<String, String>>>,
 
-    // PRs / Issues / Todos tabs
     pub repo_prs:       Vec<crate::providers::PrDetail>,
     pub repo_issues:    Vec<crate::providers::IssueDetail>,
     pub repo_todos:     Vec<crate::todos::Todo>,
@@ -244,7 +183,6 @@ pub struct St {
     pub prs_loaded:     bool,
     pub prs_issues_rx:  Option<std::sync::mpsc::Receiver<(Vec<crate::providers::PrDetail>, Vec<crate::providers::IssueDetail>)>>,
 
-    // Shared
     pub branch_count:   usize,
     pub quit:           bool,
     pub quit_after_op:  bool,
@@ -253,23 +191,15 @@ pub struct St {
     pub cfg_data_dir:   PathBuf,
     pub cfg_editor:     String,
 
-    // Pending values collected from in-TUI modals (sync / release)
     pub pending_sync_mode:   Option<String>,
     pub pending_commit_msg:  Option<String>,
     pub pending_tag_name:    Option<String>,
     pub pending_tag_msg:     Option<String>,
     pub pending_push_tag:    bool,
 
-    // Modal
     pub modal:          DetailModal,
 }
 
-// ── tree visibility rebuild ───────────────────────────────────────────────────
-
-/// Flattens `nodes` into the indices that should actually be drawn, skipping
-/// children of any collapsed directory. Recomputed whenever a directory is
-/// toggled rather than stored incrementally, since the file tree is small
-/// enough that a full rebuild is cheap.
 pub fn rebuild_tree_visible(nodes: &[TreeNode]) -> Vec<usize> {
     let mut visible = vec![];
     let mut collapsed_depth: Option<usize> = None;

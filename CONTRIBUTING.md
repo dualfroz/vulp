@@ -1,21 +1,20 @@
 # Contributing to vulp
 
-Thanks for looking at vulp. It's a young solo-maintained project, so keep
-that in mind — response times may vary, and larger changes are easier to
-land if discussed in an issue first.
+vulp is maintained by one person, so response times vary and larger changes
+are easier to land if they are discussed in an issue first.
 
 ## Building from source
 
 ```bash
-git clone https://github.com/dualfroz/vulp.git vulp
+git clone https://github.com/dualfroz/vulp.git
 cd vulp
 cargo build --release
 ./target/release/vulp --help
 ```
 
-Requires a recent stable Rust toolchain (edition 2021). `git2` and `keyring`
-pull in native dependencies (vendored OpenSSL/libgit2, so no system packages
-needed on Linux/macOS/Windows for the build itself).
+Requires a recent stable Rust toolchain (edition 2021). `git2` is built with
+vendored OpenSSL and libgit2, so no system packages are needed for the build
+on Linux, macOS or Windows.
 
 ## Before opening a PR
 
@@ -25,37 +24,38 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-All three run in CI (`.github/workflows/ci.yml`) on every PR — a red check
-means one of them failed. `cargo clippy` must be warning-free; this project
-holds that bar deliberately (see `plan/audit-2026-07-05.md` if you want the
-history of how it got there).
+All three run in CI (`.github/workflows/ci.yml`) on every PR. `cargo clippy`
+must be warning-free.
+
+Unit tests live next to the code they cover (`#[cfg(test)] mod tests`).
+Integration tests in `tests/` run the compiled `vulp` binary against
+temporary git repositories and a local bare remote, with `HOME` pointed at a
+scratch directory so they never touch your real `~/.vulp`. They need the
+`git` binary on `PATH` and run on Unix-like systems only.
 
 ## Code layout
 
-- `hub/` — the TUI's tab-based dashboard (rendering, keymap, modals,
-  background-job spawning). Business logic (`providers/`, `status/`,
-  `config/`, `codeintel/`) is kept separate from rendering (`hub/`,
-  `detail/`, `tui/`) — new features should follow that split rather than
-  mixing API/git calls into render code.
-- `cli_cmds/` — the non-interactive CLI surface (one module per command
-  group). Every CLI command should also be reflected in `docs/cli.md`.
-- `providers/` — one file per git host (`github.rs`, `gitlab.rs`,
-  `gitea.rs`). GitHub is the reference implementation; GitLab/Gitea are
-  intentionally more limited (see `docs/cli.md` and `plan/roadmap.md` for
-  what's a known gap vs. what's missing).
-- Slow operations (API calls, git network ops, shell subprocesses) run on a
-  background `std::thread` and report back over an `mpsc` channel polled
-  once per frame — see any `spawn_*` function in `hub/modals_spawn.rs` for
-  the pattern, including the "don't start a second job on top of a running
-  one" guard those functions check first.
+- `hub/` - the TUI dashboard (rendering, keymap, modals, background jobs).
+  Business logic (`providers/`, `status/`, `config/`, `codeintel/`) is kept
+  separate from rendering (`hub/`, `detail/`, `tui/`); new features should
+  follow that split instead of mixing API or git calls into render code.
+- `cli_cmds/` - the non-interactive CLI surface, one module per command
+  group. Every CLI command should also be documented in `docs/cli.md`.
+- `providers/` - one file per git host (`github.rs`, `gitlab.rs`,
+  `gitea.rs`). GitHub is the reference implementation; GitLab and Gitea are
+  more limited (see the provider table in `README.md`).
+- Slow operations (API calls, git network operations, subprocesses) run on a
+  background `std::thread` and report back over an `mpsc` channel polled once
+  per frame. See any `spawn_*` function in `hub/modals_spawn.rs` for the
+  pattern, including the guard against starting a second job on top of a
+  running one.
 
-## Reporting bugs / proposing features
+## Reporting bugs and proposing features
 
-Open a GitHub issue. For bugs, a repro (even a rough one) beats a long
-description — this is a TUI, so exact keypresses + terminal emulator matter.
+Open a GitHub issue. For bugs, a rough repro beats a long description; since
+this is a TUI, the exact keypresses and terminal emulator matter.
 
-## What this project won't do
+## Out of scope
 
-No telemetry, no forced update-nagging beyond an informational tile, no
-scope creep into being a general Git GUI — vulp is a workspace-of-many-repos
-tool first.
+No telemetry, no update nagging beyond an informational tile, and no growth
+into a general Git GUI. vulp is a tool for workspaces with many repositories.
